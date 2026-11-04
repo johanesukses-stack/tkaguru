@@ -115,6 +115,7 @@ p { margin: 0 0 .8em; }
 }
 .btn:hover { background: #f6f8fc; border-color: #b4c1d9; }
 .btn:active { transform: translateY(1px); }
+.ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.2em; }
 .btn svg { width: 18px; height: 18px; flex: none; }
 .btn-primary { background: var(--ink); border-color: var(--ink); color: #fff; box-shadow: 0 1px 0 rgba(255, 255, 255, .2) inset, 0 6px 16px rgba(39, 71, 201, .22); }
 .btn-primary:hover { background: var(--ink-700); border-color: var(--ink-700); }
@@ -521,6 +522,7 @@ pre.code { background: #0f1b3d; color: #dfe7ff; border-radius: 12px; padding: 14
 .steps-guide { padding-left: 20px; }
 .steps-guide li { margin-bottom: 6px; }
 .callout { border-radius: 12px; padding: 12px 14px; border: 1px solid var(--line); background: #f7f9fd; font-size: 14px; }
+.callout > .ic { color: var(--ink); margin-right: 2px; }
 .callout.warn { background: var(--marker-50); border-color: #f0d98a; }
 .callout.ok { background: var(--ok-50); border-color: #bfe3cd; }
 
@@ -6034,7 +6036,7 @@ const AI = (() => {
       res = await fetch(c.url, { method: 'POST', body: JSON.stringify(Object.assign({ token: c.token || '' }, body)), signal: ctrl.signal, redirect: 'follow', credentials: 'omit' });
     } catch (e) {
       if (signal && signal.aborted) { const er = new Error('Dibatalkan'); er.name = 'AbortError'; throw er; }
-      throw new AIError(ctrl.signal.aborted ? 'Proxy tidak merespons sampai batas waktu.' : 'Tidak dapat menghubungi proxy. Periksa URL, akses “Siapa saja” pada web app, dan koneksi internet.');
+      throw new AIError(ctrl.signal.aborted ? 'Proxy tidak merespons sampai batas waktu.' : 'Tidak dapat menghubungi proxy. Periksa URL /exec, akses “Anyone” (Siapa saja) pada web app, dan koneksi internet.');
     } finally { clearTimeout(to); if (signal) signal.removeEventListener('abort', onAbort); }
     const txt = await res.text();
     let data;
@@ -6462,7 +6464,7 @@ const ICONS = {
   book: '<path d="M4 4.5h6a2 2 0 0 1 2 2V20a2 2 0 0 0-2-2H4z"/><path d="M20 4.5h-6a2 2 0 0 0-2 2V20a2 2 0 0 1 2-2h6z"/>',
   send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/>',
 };
-const ic = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const ic = (n, cls = '') => `<svg class="ic${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 const LOGO = '<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="8" fill="#2747C9"/><rect x="7.5" y="6" width="17" height="20" rx="2.5" fill="#fff"/><circle cx="12" cy="11.5" r="2.1" fill="none" stroke="#2747C9" stroke-width="1.4"/><circle cx="17.5" cy="11.5" r="2.1" fill="#2747C9"/><circle cx="12" cy="17.5" r="2.1" fill="#2747C9"/><circle cx="17.5" cy="17.5" r="2.1" fill="none" stroke="#2747C9" stroke-width="1.4"/><path d="M19.4 22.6l2.3 2.3 5.2-6.4" fill="none" stroke="#F2B600" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 // ---------------- Notifikasi & dialog ----------------
@@ -7874,10 +7876,29 @@ ACT['set:save'] = () => {
   s.name = $('#sName').value.trim(); s.school = $('#sSchool').value.trim(); s.year = $('#sYear').value.trim(); s.scoring = $('#sScoring').value;
   STORE.saveSettings(s); toast('Profil disimpan.', 'ok'); renderTopbar('/pengaturan');
 };
+// Mengenali isian yang sering tertukar sebelum menghubungi proxy.
+function proxyHint(url, token) {
+  const EX = 'https://script.google.com/macros/s/…/exec';
+  if (/AIza[0-9A-Za-z_\-]{20,}/.test(url) || /AIza[0-9A-Za-z_\-]{20,}/.test(token)) {
+    return { clear: true, msg: 'Yang ditempel adalah kunci API Gemini. Kunci ini tidak boleh diisi di aplikasi; simpan di Script Properties Apps Script dengan nama GEMINI_API_KEY. Kolom URL proxy diisi alamat web app, contoh: ' + EX };
+  }
+  if (/^(gen-lang-client-)?\d{5,}$/i.test(url)) return { msg: 'Itu tampaknya nomor proyek dari Google AI Studio, bukan URL proxy. URL proxy baru didapat setelah Apps Script di-deploy sebagai Web app, bentuknya: ' + EX };
+  if (!/^https:\/\//i.test(url)) return { msg: 'URL proxy harus berupa alamat lengkap yang diawali https://, contoh: ' + EX };
+  if (/script\.google\.com/i.test(url) && !/\/exec\/?(\?.*)?$/i.test(url)) {
+    return { msg: /\/dev\/?(\?.*)?$/i.test(url) ? 'URL berakhiran /dev hanya untuk uji coba pemilik skrip. Gunakan Web app URL yang berakhiran /exec (Deploy → Manage deployments).' : 'Itu alamat editor Apps Script, bukan alamat web app. Klik Deploy → Manage deployments, lalu salin Web app URL yang berakhiran /exec.' };
+  }
+  return null;
+}
 ACT['ai:test'] = async (el) => {
   const url = $('#aiUrl').value.trim(), token = $('#aiTok').value.trim();
   const msg = $('#aiMsg');
   if (!url) { msg.innerHTML = '<span style="color:var(--bad)">Isi URL proxy terlebih dahulu.</span>'; return; }
+  const hint = proxyHint(url, token);
+  if (hint) {
+    if (hint.clear) { $('#aiUrl').value = ''; $('#aiTok').value = ''; }
+    msg.innerHTML = `<span style="color:var(--bad)">${esc(hint.msg)}</span>`;
+    return;
+  }
   el.disabled = true; msg.textContent = 'Menghubungi proxy…';
   try {
     const d = await AI.test(url, token);

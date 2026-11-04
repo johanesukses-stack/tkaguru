@@ -74,7 +74,7 @@ p { margin: 0 0 .8em; }
 .topbar .in { max-width: 1180px; margin: 0 auto; height: 100%; display: flex; align-items: center; gap: 18px; padding: 0 18px; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink-900); font-weight: 800; font-size: 18px; letter-spacing: .02em; white-space: nowrap; }
 .brand .mark { width: 32px; height: 32px; flex: none; }
-.brand small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin-top: -3px; }
+.brand small { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-700); letter-spacing: 0; margin-top: -2px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .nav { display: flex; gap: 2px; margin-left: 8px; }
 .nav a { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 10px; text-decoration: none; color: var(--muted); font-weight: 600; font-size: 14.5px; }
 .nav a:hover { background: var(--ink-50); color: var(--ink-700); }
@@ -88,9 +88,18 @@ p { margin: 0 0 .8em; }
   .nav a span { display: none; }
   .nav a { padding: 9px; }
   .ai-chip span.lbl { display: none; }
-  .brand small { display: none; }
+  .brand small { font-size: 10.5px; max-width: 128px; }
   .topbar .in { gap: 10px; padding: 0 12px; }
 }
+@media (max-width: 400px) {
+  .topbar .in { gap: 6px; padding: 0 10px; }
+  .brand { gap: 7px; }
+  .brand .mark { width: 30px; height: 30px; }
+  .brand small { font-size: 10px; }
+  .nav { margin-left: 0; gap: 0; }
+  .nav a { padding: 8px; }
+}
+@media (max-width: 339px) { .brand small { display: none; } .ai-chip { display: none; } }
 
 /* ---------- Tata letak umum ---------- */
 .wrap { max-width: 1180px; margin: 0 auto; padding: 26px 18px 64px; }
@@ -6041,8 +6050,39 @@ const AI = (() => {
     const txt = await res.text();
     let data;
     try { data = JSON.parse(txt); } catch (e) { throw new AIError(`Respons proxy bukan JSON (HTTP ${res.status}). Pastikan URL yang dipakai adalah URL web app yang berakhiran /exec.`); }
-    if (!data.ok) throw new AIError(data.error || 'Proxy mengembalikan galat.');
+    if (!data.ok) throw classify(new AIError(data.error || 'Proxy mengembalikan galat.'), data);
     return data;
+  }
+  // ---- Batas pemakaian Gemini (HTTP 429) ----
+  // Batas per menit: aplikasi menunggu sesuai waktu yang diminta Google, lalu melanjutkan.
+  // Batas harian: proses dihentikan dengan pesan yang jelas (tidak diakali dengan kunci lain).
+  const RATE_RE = /quota|rate.?limit|resource.?exhausted|too many requests|\b429\b/i;
+  const DAY_RE = /per.?day|perday|daily|harian/i;
+  function secondsOf(str) {
+    const m = /(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?!s))?\s*(?:([\d.]+)\s*s)?/i.exec(String(str || '').trim());
+    if (!m || !(m[1] || m[2] || m[3])) return 0;
+    return (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + Math.ceil(parseFloat(m[3] || 0));
+  }
+  function classify(er, data) {
+    const msg = String((data && data.error) || er.message || '');
+    if (!((data && +data.status === 429) || RATE_RE.test(msg))) return er;
+    er.rate = true;
+    const hint = (data && data.retryDelay) || ((/retry in\s+([\dhms.\s]+?)(?:\.\s|\.?$|\n)/i.exec(msg) || [])[1]) || '';
+    er.wait = secondsOf(hint);
+    er.daily = er.wait > 120 || (!er.wait && DAY_RE.test(msg));
+    if (er.daily) er.message = 'Kuota harian Gemini untuk API key ini sudah habis. Kuota direset setiap tengah malam waktu Pasifik (sekitar pukul 14.00–15.00 WIB). Sementara itu, gunakan generator lokal, atau aktifkan penagihan di Google AI Studio untuk batas yang lebih besar.';
+    return er;
+  }
+  const sleep = (ms, signal) => new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    if (signal) signal.addEventListener('abort', () => { clearTimeout(t); const er = new Error('Dibatalkan'); er.name = 'AbortError'; reject(er); }, { once: true });
+  });
+  let lastNote = 0;
+  function noteWait(sec) {
+    const now = Date.now();
+    if (now - lastNote < 9000) return;
+    lastNote = now;
+    try { toast(`Batas per menit Gemini tercapai. Menunggu ${sec} detik, lalu proses dilanjutkan otomatis.`); } catch (e) { /* abaikan */ }
   }
   function parseJSON(text) {
     let t = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
@@ -6055,13 +6095,25 @@ const AI = (() => {
   }
   let lastModel = '';
   async function ask(prompt, signal, temperature = 0.7, retries = 2) {
-    let lastErr;
-    for (let k = 0; k <= retries; k++) {
+    let lastErr, waits = 0;
+    for (let k = 0; k <= retries;) {
       try {
         const d = await post({ prompt, system: SYSTEM, json: true, temperature }, signal);
         if (d.model) lastModel = d.model;
         return parseJSON(d.text);
-      } catch (e) { if (e.name === 'AbortError') throw e; lastErr = e; }
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        lastErr = e;
+        if (e.rate) {
+          if (e.daily || waits >= 5) throw e;
+          const sec = Math.min(90, Math.max(5, e.wait ? e.wait + 2 : 20 + waits * 15));
+          noteWait(sec);
+          await sleep(sec * 1000, signal);
+          waits++;
+          continue; // menunggu batas per menit tidak dihitung sebagai percobaan gagal
+        }
+        k++;
+      }
     }
     throw lastErr;
   }
@@ -6371,7 +6423,10 @@ function doPost(e) {
       headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
     });
     var data = JSON.parse(res.getContentText() || '{}');
-    if (res.getResponseCode() !== 200) return out_({ ok: false, error: (data.error && data.error.message) || ('HTTP ' + res.getResponseCode()) });
+    if (res.getResponseCode() !== 200) {
+      var ri = ((data.error && data.error.details) || []).filter(function (d) { return String(d['@type'] || '').indexOf('RetryInfo') > -1; })[0];
+      return out_({ ok: false, status: res.getResponseCode(), retryDelay: ri ? ri.retryDelay : '', error: (data.error && data.error.message) || ('HTTP ' + res.getResponseCode()) });
+    }
     var parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
     var text = parts.filter(function (p) { return !p.thought; }).map(function (p) { return p.text || ''; }).join('');
     return out_({ ok: true, text: text, model: model });
@@ -6408,7 +6463,10 @@ export default {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(payload),
       });
       const data = await r.json();
-      if (!r.ok) return json({ ok: false, error: (data.error && data.error.message) || 'HTTP ' + r.status });
+      if (!r.ok) {
+        const ri = ((data.error && data.error.details) || []).find((d) => String(d['@type'] || '').includes('RetryInfo'));
+        return json({ ok: false, status: r.status, retryDelay: ri ? ri.retryDelay : '', error: (data.error && data.error.message) || 'HTTP ' + r.status });
+      }
       const parts = data.candidates?.[0]?.content?.parts || [];
       return json({ ok: true, text: parts.filter((p) => !p.thought).map((p) => p.text || '').join(''), model });
     } catch (e) {
@@ -6465,6 +6523,8 @@ const ICONS = {
   send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/>',
 };
 const ic = (n, cls = '') => `<svg class="ic${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+// Identitas lembaga yang tampil di bawah tulisan TKA GURU (dapat diganti lewat Pengaturan → Nama sekolah).
+const INSTANSI = 'MI Husnayain Sleman';
 const LOGO = '<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="8" fill="#2747C9"/><rect x="7.5" y="6" width="17" height="20" rx="2.5" fill="#fff"/><circle cx="12" cy="11.5" r="2.1" fill="none" stroke="#2747C9" stroke-width="1.4"/><circle cx="17.5" cy="11.5" r="2.1" fill="#2747C9"/><circle cx="12" cy="17.5" r="2.1" fill="#2747C9"/><circle cx="17.5" cy="17.5" r="2.1" fill="none" stroke="#2747C9" stroke-width="1.4"/><path d="M19.4 22.6l2.3 2.3 5.2-6.4" fill="none" stroke="#F2B600" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 // ---------------- Notifikasi & dialog ----------------
@@ -6684,12 +6744,13 @@ function route() {
 function setView(html) { const v = $('#view'); v.innerHTML = html; return v; }
 function renderTopbar(h) {
   const tb = $('#topbar');
-  if (APP.mode === 'siswa') { tb.innerHTML = `<div class="in"><span class="brand">${LOGO}<span>TKA GURU<small>Mode latihan siswa</small></span></span></div>`; return; }
   const s = STORE.settings();
+  const inst = esc(String(s.school || '').trim() || INSTANSI);
+  if (APP.mode === 'siswa') { tb.innerHTML = `<div class="in"><span class="brand">${LOGO}<span>TKA GURU<small>${inst} • Mode latihan siswa</small></span></span></div>`; return; }
   const on = (re) => (re.test(h) ? 'on' : '');
   const aiOn = s.ai && s.ai.url && s.ai.verifiedAt;
   tb.innerHTML = `<div class="in">
-    <a class="brand" href="#/">${LOGO}<span>TKA GURU<small>Naskah TKA dari kisi-kisi</small></span></a>
+    <a class="brand" href="#/" title="TKA GURU — ${inst}">${LOGO}<span>TKA GURU<small>${inst}</small></span></a>
     <nav class="nav" aria-label="Navigasi utama">
       <a href="#/" class="${on(/^\/?$/)}">${ic('home')}<span>Beranda</span></a>
       <a href="#/buat" class="${on(/^\/(buat|proses)/)}">${ic('plus')}<span>Buat naskah</span></a>

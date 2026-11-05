@@ -4619,104 +4619,303 @@ const IPF = (() => {
     return `${line(lx, ly, x, y, { stroke: c, sw: col ? 1.8 : 1.3 })}${circ(x, y, 2.6, { fill: c, stroke: c, sw: 1 })}${tag(lx, ly, txt)}`;
   }
 
+  /* ------------------------------ Ilustrasi berbayang (gaya buku pelajaran) */
+  // Gradasi warna memberi kesan volume; id unik per gambar agar tidak bentrok
+  // ketika banyak gambar tampil dalam satu halaman.
+  let _gi = 0;
+  const gk = () => 'g' + (++_gi).toString(36) + Math.floor(Math.random() * 46656).toString(36);
+  const stops = (ss) => ss.map(([o, c, a]) => `<stop offset="${o}" stop-color="${c}"${a != null ? ` stop-opacity="${a}"` : ''}/>`).join('');
+  const rgrad = (id, ss, cx = '36%', cy = '30%', r = '78%') => `<radialGradient id="${id}" cx="${cx}" cy="${cy}" r="${r}">${stops(ss)}</radialGradient>`;
+  const lgrad = (id, ss, x1 = 0, y1 = 0, x2 = 0, y2 = 1) => `<linearGradient id="${id}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops(ss)}</linearGradient>`;
+  // bahan organ [terang, dasar, gelap] → gradasi radial (sorot cahaya dari kiri atas)
+  const mat = (id, c, o = {}) => rgrad(id, [['0', c[0]], ['0.5', c[1]], ['1', c[2]]], o.cx, o.cy, o.r);
+  const defs = (s) => `<defs>${s}</defs>`;
+  const fp = (d, fill, stroke, sw = 1.3, extra = '') => `<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"${extra}/>`;
+  const shade = (d, dx = 2, dy = 3, op = 0.15) => `<path d="${d}" fill="#3B1D10" opacity="${op}" transform="translate(${dx} ${dy})"/>`;
+  // saluran berbentuk tabung (usus, kerongkongan, pembuluh): tepi gelap, isi, kilau
+  function tube(d, w, cols, o = {}) {
+    const [edge, base, light] = cols;
+    let s = path(d, { stroke: edge, sw: w, cap: o.cap || 'round' }) + path(d, { stroke: base, sw: w - 2.4, cap: o.cap || 'round' });
+    if (o.bands) s += path(d, { stroke: edge, sw: w - 2.4, dash: o.bands, op: o.bandOp || 0.32 });
+    if (light) s += `<g transform="translate(${n2(-w * 0.13)} ${n2(-w * 0.13)})">${path(d, { stroke: light, sw: Math.max(1.1, n2(w * 0.24)), cap: o.cap || 'round', op: 0.7 })}</g>`;
+    return s;
+  }
+
   /* ------------------------------------------------------------------ Organ */
   const ORG = {};
+  // Penampang bola mata (cahaya masuk dari kiri)
+  const arcP = (cx, cy, r, a0, a1) => {
+    const p0 = [cx + r * Math.cos(a0 * Math.PI / 180), cy + r * Math.sin(a0 * Math.PI / 180)];
+    const p1 = [cx + r * Math.cos(a1 * Math.PI / 180), cy + r * Math.sin(a1 * Math.PI / 180)];
+    return `M${n2(p0[0])} ${n2(p0[1])} A ${r} ${r} 0 ${Math.abs(a1 - a0) > 180 ? 1 : 0} 1 ${n2(p1[0])} ${n2(p1[1])}`;
+  };
   ORG.mata = {
-    w: 380, h: 250, title: 'Penampang bola mata',
-    base: () => [
-      circ(205, 125, 88, { fill: '#FFFFFF', stroke: C.line, sw: 3 }),
-      circ(205, 125, 84, { fill: '#F4F9FF', stroke: 'none', sw: 0 }),
-      path('M250.9 59.5 A80 80 0 0 1 250.9 190.5', { stroke: '#D9534F', sw: 5 }),
-      path('M131 77 Q 92 125 131 173', { fill: '#E3F2FD', stroke: '#5B9BD5', sw: 2.5 }),
-      line(137, 86, 137, 112, { stroke: '#8B5A2B', sw: 7, cap: 'round' }),
-      line(137, 138, 137, 164, { stroke: '#8B5A2B', sw: 7, cap: 'round' }),
-      ell(153, 125, 11, 27, { fill: '#CDE6FA', stroke: C.line, sw: 1.6 }),
-      line(153, 98, 141, 88, { stroke: '#B0BEC5', sw: 1.5 }), line(153, 152, 141, 162, { stroke: '#B0BEC5', sw: 1.5 }),
-      path('M290 108 L352 102 L352 148 L290 142 Z', { fill: '#F2C96B', stroke: '#B08A2E', sw: 1.6 }),
-    ].join(''),
+    w: 380, h: 262, title: 'Penampang bola mata',
+    base: () => {
+      const k = gk();
+      const cx = 200, cy = 131;
+      return [
+        defs([
+          rgrad(k + 'vi', [['0', '#FFFFFF'], ['0.7', '#F3F8FC'], ['1', '#DCE8F2']], '45%', '45%', '60%'),
+          rgrad(k + 'sc', [['0', '#FFFFFF'], ['0.82', '#F4F1EC'], ['1', '#D9D2C7']], '42%', '38%', '62%'),
+          rgrad(k + 'ln', [['0', '#FFFFFF'], ['0.6', '#E2F1FB'], ['1', '#A9CDEA']], '38%', '35%', '70%'),
+          lgrad(k + 'ir', [['0', '#8A5A2E'], ['0.5', '#5E3A1C'], ['1', '#8A5A2E']], 0, 0, 1, 0),
+          lgrad(k + 'nv', [['0', '#F7E3A0'], ['0.5', '#E8C25A'], ['1', '#C79A2E']]),
+          rgrad(k + 'ms', [['0', '#E07A6E'], ['1', '#A8443C']], '40%', '40%', '70%'),
+        ].join('')),
+        // otot penggerak bola mata (atas dan bawah)
+        fp('M170 46 C 196 32, 236 30, 262 36 L 352 58 L 352 72 L 262 54 C 236 48, 204 50, 178 58 Z', `url(#${k}ms)`, '#7E2C26', 1.1),
+        fp('M170 216 C 196 230, 236 232, 262 226 L 352 204 L 352 190 L 262 208 C 236 214, 204 212, 178 204 Z', `url(#${k}ms)`, '#7E2C26', 1.1),
+        path('M190 47 L 344 64 M190 215 L 344 198', { stroke: '#F2A79C', sw: 0.8, op: 0.6, dash: '3 3' }),
+        // saraf mata
+        fp('M282 116 C 310 112, 334 108, 366 106 L 366 158 C 334 156, 310 152, 282 148 Z', `url(#${k}nv)`, '#A88128', 1.3),
+        path('M288 128 C 314 126, 340 124, 366 124 M288 136 C 314 136, 340 138, 366 140', { stroke: '#C0392B', sw: 2, op: 0.85 }),
+        path('M288 132 C 314 131, 340 131, 366 132', { stroke: '#3B5BA9', sw: 1.8, op: 0.8 }),
+        // sklera, koroid, retina, badan kaca
+        `<circle cx="${cx}" cy="${cy}" r="92" fill="url(#${k}sc)" stroke="#9E978C" stroke-width="1.4"/>`,
+        `<circle cx="${cx}" cy="${cy}" r="84" fill="#8A3A2E"/>`,
+        path(arcP(cx, cy, 80.5, -128, 128), { stroke: '#E8836A', sw: 5 }),
+        `<circle cx="${cx}" cy="${cy}" r="78" fill="url(#${k}vi)"/>`,
+        path('M262 92 C 270 104, 276 116, 278 128 M262 172 C 270 160, 276 148, 278 136', { stroke: '#D0564A', sw: 1, op: 0.55 }),
+        // kornea dan bilik mata depan
+        fp('M118 87 A 60 60 0 0 0 118 175 L 128 172 C 118 150, 118 112, 128 90 Z', '#E5F3FC', '#5B9BD5', 1.3),
+        path('M106 108 A 60 60 0 0 1 112 98', { stroke: '#FFFFFF', sw: 2.4, cap: 'round' }),
+        // badan siliaris, iris, pupil (celah), lensa
+        fp('M117 86 C 124 84, 134 88, 140 96 L 132 100 C 128 96, 122 94, 118 94 Z M117 176 C 124 178, 134 174, 140 166 L 132 162 C 128 166, 122 168, 118 168 Z', '#B65A48', '#7E2C26', 1),
+        path('M136 98 L 146 104 M138 94 L 148 101 M136 164 L 146 158 M138 168 L 148 161', { stroke: '#B7A99A', sw: 0.8 }),
+        fp('M124.5 92 C 127 91, 130 91.5, 131 93 L 130.4 119 C 129 120.4, 127 120.4, 126 119 Z', `url(#${k}ir)`, '#3E2410', 0.8),
+        fp('M124.5 170 C 127 171, 130 170.5, 131 169 L 130.4 143 C 129 141.6, 127 141.6, 126 143 Z', `url(#${k}ir)`, '#3E2410', 0.8),
+        `<ellipse cx="146" cy="${cy}" rx="11" ry="31" fill="url(#${k}ln)" stroke="#5B8DB8" stroke-width="1.3"/>`,
+        path('M140 112 C 138 120, 138 126, 139 132', { stroke: '#FFFFFF', sw: 2, cap: 'round' }),
+      ].join('');
+    },
     pt: {
-      kornea: [112, 108, 52, 66], iris: [137, 94, 112, 22], pupil: [137, 125, 38, 140], lensa: [156, 140, 124, 232],
-      retina: [274, 85, 330, 30], 'saraf mata': [330, 125, 350, 206], sklera: [205, 38, 236, 14],
+      kornea: [104, 112, 34, 74], iris: [128, 104, 104, 22], pupil: [128, 131, 34, 131], lensa: [148, 148, 34, 196],
+      retina: [252, 69, 310, 22], 'saraf mata': [334, 134, 356, 92], sklera: [272, 181, 356, 176],
     },
   };
+  // spiral (rumah siput): titik dari pusat ke luar
+  const spiral = (cx, cy, r0, r1, turns, a0 = 0) => {
+    const n = Math.round(turns * 24); const pts = [];
+    for (let i = 0; i <= n; i++) { const f = i / n, a = (a0 + f * turns * 360) * Math.PI / 180, r = r0 + (r1 - r0) * f; pts.push(`${n2(cx + r * Math.cos(a))} ${n2(cy + r * Math.sin(a))}`); }
+    return 'M' + pts.join(' L ');
+  };
   ORG.telinga = {
-    w: 380, h: 252, title: 'Bagian-bagian telinga',
-    base: () => [
-      path('M58 34 C 18 50, 14 170, 52 214 C 66 228, 86 218, 82 196 C 78 172, 60 160, 62 132 C 64 104, 84 96, 82 70 C 80 46, 70 30, 58 34 Z', { fill: '#F6CBAA', stroke: '#8A5A44', sw: 2 }),
-      path('M60 60 C 42 80, 40 150, 58 186', { stroke: '#C98E70', sw: 2 }),
-      rect(78, 107, 98, 22, { fill: '#FBE3D3', stroke: 'none', sw: 0 }),
-      line(80, 107, 176, 107, { stroke: '#8A5A44', sw: 2 }), line(80, 129, 176, 129, { stroke: '#8A5A44', sw: 2 }),
-      ell(200, 120, 25, 33, { fill: '#FFF4E0', stroke: '#C7A77C', sw: 1.4 }),
-      path('M205 150 C 210 180, 230 205, 252 228', { stroke: '#C7A77C', sw: 9, cap: 'round' }),
-      ell(177, 118, 4, 18, { fill: '#F2A0A0', stroke: '#A33', sw: 1.4 }),
-      path('M181 108 L193 102 L196 110 L184 116 Z', { fill: '#EADDB8', stroke: '#8A7A50', sw: 1.4 }),
-      circ(200, 103, 5, { fill: '#EADDB8', stroke: '#8A7A50', sw: 1.4 }),
-      path('M204 108 L214 112 L212 122 L204 118', { fill: '#EADDB8', stroke: '#8A7A50', sw: 1.4 }),
-      ell(232, 80, 13, 18, { stroke: '#5A8FD0', sw: 4, tr: 'rotate(-20 232 80)' }),
-      ell(252, 76, 13, 18, { stroke: '#5A8FD0', sw: 4, tr: 'rotate(25 252 76)' }),
-      ell(244, 96, 18, 9, { stroke: '#5A8FD0', sw: 4 }),
-      circ(232, 112, 9, { fill: '#CFE3FA', stroke: '#5A8FD0', sw: 1.4 }),
-      path('M258 140 a4 4 0 1 1 8 0 a8 8 0 1 1 -16 0 a12 12 0 1 1 24 0 a16 16 0 1 1 -32 0', { fill: '#DCEBFC', stroke: '#3B7DD8', sw: 4 }),
-      path('M286 134 C 300 128, 322 118, 350 112', { stroke: '#E8C25A', sw: 7, cap: 'round' }),
-    ].join(''),
+    w: 380, h: 262, title: 'Bagian-bagian telinga',
+    base: () => {
+      const k = gk();
+      const LAB = ['#5E4A9A', '#CDBDF0', '#F3EEFF'];
+      const PINNA = 'M102 44 C 78 28, 40 36, 29 70 C 19 104, 21 150, 35 182 C 43 200, 45 222, 59 233 C 73 243, 92 238, 98 222 L 102 208 Z';
+      return [
+        defs([
+          lgrad(k + 'bn', [['0', '#F6EBD8'], ['1', '#E3CFAE']]),
+          `<pattern id="${k}bt" width="9" height="9" patternUnits="userSpaceOnUse"><circle cx="2" cy="3" r="0.9" fill="#C9AF86"/><circle cx="6.5" cy="7" r="0.7" fill="#C9AF86"/></pattern>`,
+          lgrad(k + 'sk', [['0', SKIN[0]], ['1', SKIN[1]]], 0, 0, 1, 0),
+          rgrad(k + 'co', [['0', '#F3EEFF'], ['0.6', '#CDBDF0'], ['1', '#9C86D6']], '40%', '38%', '70%'),
+          lgrad(k + 'nv', [['0', '#F7E3A0'], ['0.5', '#E8C25A'], ['1', '#C79A2E']]),
+          lgrad(k + 'ca', [['0', '#C98A72'], ['0.45', '#E3A88F'], ['1', '#F1C3AD']]),
+        ].join('')),
+        // tulang pelipis (latar) dan kulit kepala
+        fp('M104 32 C 180 24, 300 26, 374 38 L 374 238 C 300 254, 180 258, 104 248 Z', `url(#${k}bn)`, '#BFA57E', 1.3),
+        fp('M104 32 C 180 24, 300 26, 374 38 L 374 238 C 300 254, 180 258, 104 248 Z', `url(#${k}bt)`, 'none', 0),
+        fp('M92 34 C 96 33, 102 32.5, 106 32.4 L 106 248 C 102 247.8, 96 247.4, 92 247 Z', `url(#${k}sk)`, SKIN[2], 1.2),
+        // daun telinga
+        shade(PINNA, 2, 3, 0.12), fp(PINNA, `url(#${k}sk)`, SKIN[2], 1.5),
+        path('M97 52 C 72 43, 46 52, 39 77 C 31 108, 33 148, 45 177', { stroke: '#D59A7E', sw: 2.4, cap: 'round' }),
+        path('M90 70 C 68 70, 56 94, 58 118 C 60 138, 70 150, 82 156', { stroke: '#D59A7E', sw: 2, cap: 'round' }),
+        `<ellipse cx="88" cy="126" rx="13" ry="17" fill="#E3AE94" opacity="0.7"/>`,
+        // saluran telinga luar
+        fp('M80 116 C 112 103, 160 120, 197 108.5 L 197 134 C 160 145, 112 128, 80 140 C 74 136, 74 120, 80 116 Z', `url(#${k}ca)`, '#A86F5A', 1.3),
+        path('M84 119.6 C 114 107.6, 160 124, 196 112.6', { stroke: '#B97A63', sw: 3, op: 0.55 }),
+        path('M86 136 C 116 126, 160 142, 196 131', { stroke: '#FBE1D3', sw: 2, op: 0.8 }),
+        // telinga tengah dan saluran eustachius
+        tube('M232 152 C 246 180, 268 214, 302 254', 11, ['#B07A6A', '#EBC0B2', '#FCE4DB']),
+        fp('M199 95 C 214 88, 236 88, 247 96 L 249 146 C 241 156, 227 158, 215 156 L 201 150 Z', '#FBF5EC', '#BFA57E', 1.2),
+        `<ellipse cx="198" cy="122" rx="3.6" ry="23" fill="#E9E2DE" stroke="#8E8279" stroke-width="1.3" transform="rotate(8 198 122)"/>`,
+        // tulang pendengaran: martil, landasan, sanggurdi
+        fp('M198.5 134 L 203 106 C 203 97, 214 92, 217 99 C 219 106, 211 109, 207 107 L 201.6 134 Z', '#F4E6C4', '#8C7448', 1.1),
+        fp('M215 95 C 221 89, 231 91, 232 99 L 230.4 120 C 229.6 123, 226.4 123, 226 120 L 225 106 C 221 106, 216 103, 215 95 Z', '#F4E6C4', '#8C7448', 1.1),
+        fp('M228 117.5 L 239.5 110.5 L 243.5 110.5 L 243.5 127 L 239.5 127 L 228 121.5 Z', '#F4E6C4', '#8C7448', 1.1),
+        fp('M232 117.6 L 239 114 L 239 123.6 L 232 120.4 Z', '#FBF5EC', '#8C7448', 0.8),
+        // saraf pendengaran
+        fp('M282 112 C 316 104, 344 104, 374 102 L 374 148 C 344 146, 318 150, 298 160 C 296 142, 290 124, 282 112 Z', `url(#${k}nv)`, '#A88128', 1.2),
+        path('M300 118 C 330 112, 352 112, 374 112 M304 132 C 330 128, 352 126, 374 126 M306 146 C 330 140, 352 138, 374 138', { stroke: '#C79A2E', sw: 0.9, op: 0.7 }),
+        // rumah siput
+        tube('M252 124 C 258 134, 264 140, 272 144', 9, LAB),
+        `<circle cx="284" cy="158" r="25" fill="url(#${k}co)" stroke="#5E4A9A" stroke-width="1.4"/>`,
+        path(spiral(284, 158, 3, 21, 2.6, 200), { stroke: '#6E57A8', sw: 2.2, cap: 'round' }),
+        // ruang depan dan saluran setengah lingkaran
+        tube('M249 104 C 232 78, 238 42, 262 41 C 286 40, 290 74, 268 102', 7, LAB),
+        tube('M264 104 C 276 72, 310 60, 318 82 C 324 104, 298 118, 270 114', 7, LAB),
+        tube('M258 108 C 270 90, 298 88, 302 99 C 306 110, 286 114, 266 112', 6, LAB),
+        `<ellipse cx="256" cy="116" rx="11" ry="13" fill="url(#${k}co)" stroke="#5E4A9A" stroke-width="1.3"/>`,
+      ].join('');
+    },
     pt: {
-      'daun telinga': [36, 126, 22, 236], 'saluran telinga': [128, 118, 118, 64], 'gendang telinga': [177, 132, 160, 236],
-      'tulang pendengaran': [197, 104, 176, 24], 'saluran setengah lingkaran': [252, 58, 262, 18], 'rumah siput': [266, 152, 314, 236],
-      'saraf pendengaran': [320, 120, 352, 74], 'saluran eustachius': [232, 202, 226, 242],
+      'daun telinga': [42, 170, 24, 246], 'saluran telinga': [150, 124, 140, 16], 'gendang telinga': [199, 136, 176, 246],
+      'tulang pendengaran': [222, 102, 206, 16], 'saluran setengah lingkaran': [272, 42, 320, 16], 'rumah siput': [292, 168, 334, 246],
+      'saraf pendengaran': [348, 126, 356, 66], 'saluran eustachius': [276, 222, 236, 246],
     },
   };
   ORG.pernapasan = {
-    w: 380, h: 300, title: 'Organ pernapasan manusia',
-    base: () => [
-      path('M118 34 Q 150 16 178 32 L190 62 L194 92 L186 92 L178 66 Q 140 66 120 52 Z', { fill: '#F8D7C6', stroke: '#A0644A', sw: 1.6 }),
-      rect(186, 88, 20, 22, { rx: 6, fill: '#F2B8A0', stroke: '#A0644A', sw: 1.6 }),
-      rect(188, 108, 16, 62, { rx: 3, fill: '#F7E1D3', stroke: '#A0644A', sw: 1.6 }),
-      [116, 124, 132, 140, 148, 156, 164].map((y) => line(188, y, 204, y, { stroke: '#C98E70', sw: 1.2 })).join(''),
-      path('M178 122 C 150 108, 104 140, 98 214 C 94 258, 116 280, 148 274 C 172 270, 180 252, 180 230 L180 150 Z', { fill: '#F4A6A6', stroke: '#A84848', sw: 1.8 }),
-      path('M214 122 C 242 108, 288 140, 294 214 C 298 258, 276 280, 244 274 C 220 270, 212 252, 212 230 L212 150 Z', { fill: '#F4A6A6', stroke: '#A84848', sw: 1.8 }),
-      path('M196 168 L160 198 M196 168 L232 198', { stroke: '#C98E70', sw: 9, cap: 'round' }),
-      path('M160 198 L138 222 M160 198 L156 236 M160 198 L132 196 M138 222 L126 236 M138 222 L140 248', { stroke: '#C98E70', sw: 3, cap: 'round' }),
-      path('M232 198 L254 222 M232 198 L236 236 M232 198 L260 196 M254 222 L266 236 M254 222 L252 248', { stroke: '#C98E70', sw: 3, cap: 'round' }),
-      path('M88 288 Q 196 238 304 288', { stroke: '#B5651D', sw: 6, cap: 'round' }),
-    ].join(''),
+    w: 380, h: 306, title: 'Organ pernapasan manusia',
+    base: () => {
+      const k = gk();
+      const LR = 'M178 138 C 162 138, 120 168, 114 228 C 112 252, 116 268, 124 272 C 146 262, 176 256, 196 260 C 198 238, 196 214, 194 196 C 192 170, 190 146, 178 138 Z';
+      const LL = 'M230 138 C 246 138, 288 168, 294 228 C 296 252, 292 268, 284 272 C 262 262, 238 256, 218 260 C 218 248, 230 240, 226 230 C 220 222, 214 214, 214 200 C 214 170, 218 146, 230 138 Z';
+      const DIA = 'M104 296 C 136 266, 180 256, 204 260 C 228 256, 272 266, 306 296 L 306 305 C 272 276, 228 268, 204 271 C 180 268, 136 276, 104 305 Z';
+      const CART = ['#8FA3B5', '#E4ECF2', '#FFFFFF'];
+      const BRS = ['#8FA3B5', '#DCE6EE', '#FFFFFF'];
+      return [
+        defs([
+          mat(k + 'lu', ['#FAD0D0', '#EE9C9E', '#C9686E'], { cx: '40%', cy: '35%', r: '80%' }),
+          `<pattern id="${k}al" width="6" height="6" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="1.9" fill="none" stroke="#B9545C" stroke-width="0.55"/></pattern>`,
+          lgrad(k + 'dm', [['0', '#D57A62'], ['1', '#9E4330']]),
+          mat(k + 'nc', ['#E58C95', '#C4505C', '#8E2C38']),
+        ].join('')),
+        bodyFig(k),
+        // rongga hidung (dengan sekat karang hidung) dan rongga mulut
+        fp('M151.5 57.5 C 157 47, 177 40, 198 42.5 L 200.5 57 C 188 58, 168 58.4, 154 59 Z', `url(#${k}nc)`, '#7A2430', 1),
+        path('M168 46.5 C 177 44.6, 189 45, 196 47.6 M166 51.4 C 177 49.8, 189 50.2, 197 52.6 M163 55.6 C 175 54.6, 188 54.8, 197 56', { stroke: '#F3B9BE', sw: 2, cap: 'round' }),
+        mouthFig(),
+        // tekak, pangkal tenggorokan, batang tenggorokan
+        tube('M199 50 C 203 60, 205 76, 205 98', 9, ['#B4535F', '#E39A94', '#FBD7D2']),
+        // paru-paru kanan (utuh) dan kiri (dibuka: tampak cabang bronkiolus)
+        shade(LR), fp(LR, `url(#${k}lu)`, '#A5474F', 1.5), fp(LR, `url(#${k}al)`, 'none', 0, ' opacity="0.35"'),
+        path('M128 186 C 150 210, 170 236, 186 258 M120 206 C 140 203, 158 207, 168 216', { stroke: '#A5474F', sw: 1.2, op: 0.75 }),
+        shade(LL), fp(LL, `url(#${k}lu)`, '#A5474F', 1.5), fp(LL, `url(#${k}al)`, 'none', 0, ' opacity="0.22"'),
+        path('M284 186 C 266 208, 250 234, 238 258', { stroke: '#A5474F', sw: 1.2, op: 0.75 }),
+        tube('M184 207 L 170 194 M184 207 L 166 222 M184 207 L 180 236', 6, BRS),
+        tube('M232 208 L 252 188 M232 208 L 262 216 M232 208 L 246 238', 5, BRS),
+        tube('M252 188 L 262 172 M252 188 L 272 186 M262 216 L 280 206 M262 216 L 280 230 M246 238 L 262 252 M246 238 L 236 256 M246 238 L 266 240', 3, BRS),
+        path('M262 172 l 4 -6 M262 172 l -5 -4 M272 186 l 7 -3 M272 186 l 4 6 M280 206 l 6 -5 M280 206 l 4 5 M280 230 l 6 3 M280 230 l 1 7 M262 252 l 7 1 M262 252 l 1 7 M236 256 l -4 6 M236 256 l 5 5 M266 240 l 6 -3 M266 240 l 5 4', { stroke: '#8FA3B5', sw: 1.3, cap: 'round' }),
+        tube('M205 186 C 200 194, 192 201, 184 207 M205 186 C 212 195, 222 202, 232 208', 9, CART),
+        tube('M205 112 L 205 188', 14, CART, { bands: '3.2 3.2', bandOp: 0.45 }),
+        fp('M196 96 C 200 94.4, 210 94.4, 214 96 L 214.6 104 C 214.6 109, 212 113, 205 114.6 C 198 113, 195.4 109, 195.4 104 Z', '#E4ECF2', '#8FA3B5', 1.3),
+        fp('M196.4 97 C 193.4 99.6, 193.6 104, 197 106.6 L 199.6 100.4 Z', '#D3DEE7', '#8FA3B5', 1),
+        path('M199 106.4 C 203 108, 207 108, 211 106.4', { stroke: '#8FA3B5', sw: 1 }),
+        // diafragma
+        `<g clip-path="url(#${k}bc)">${fp(DIA, `url(#${k}dm)`, '#7E3424', 1.3)}${path('M130 288 C 156 272, 182 266, 204 266 C 226 266, 252 272, 280 288', { stroke: '#F0A58E', sw: 1, op: 0.7, dash: '5 4' })}</g>`,
+      ].join('');
+    },
     pt: {
-      'rongga hidung': [150, 40, 58, 28], laring: [196, 98, 300, 66], trakea: [200, 140, 346, 114], bronkus: [172, 184, 40, 150],
-      bronkiolus: [258, 228, 346, 196], 'paru-paru': [270, 158, 346, 154], diafragma: [252, 270, 346, 272],
+      'rongga hidung': [176, 52, 34, 44], laring: [212, 103, 352, 96], trakea: [205, 150, 352, 148], bronkus: [192, 201, 34, 164],
+      bronkiolus: [271, 223, 352, 216], 'paru-paru': [142, 232, 34, 240], diafragma: [262, 280, 352, 284],
     },
   };
+  // Siluet tubuh: kepala tampak samping (menghadap kiri) dan badan tampak depan.
+  const SKIN = ['#F9E0D2', '#F1C7AF', '#DDA083'];
+  function bodyFig(k, o = {}) {
+    const head = 'M224 98 C 232 86, 240 64, 237 44 C 234 20, 214 6, 192 8 C 172 10, 159 22, 157 36 L 155 44 C 152 49, 147 54, 145 58 C 147 61, 151 62, 153 63 C 151 65, 150 67, 152 69 C 150 71, 150 74, 152 76 C 151 80, 152 84, 156 86 C 164 92, 176 92, 184 96 L 184 104';
+    const torso = 'M184 104 L 183 112 C 160 116, 122 116, 108 132 C 99 142, 99 160, 102 178 C 106 220, 114 250, 116 266 C 118 290, 108 320, 108 352 L 109 400 L 299 400 L 300 352 C 300 320, 290 290, 292 266 C 294 250, 302 220, 306 178 C 309 160, 309 142, 300 132 C 286 116, 250 116, 226 112 L 224 98';
+    return [
+      lgrad(k + 'sk', [['0', SKIN[1]], ['0.45', SKIN[0]], ['1', SKIN[1]]], 0, 0, 1, 0),
+      `<clipPath id="${k}bc"><path d="${torso} Z"/></clipPath>`,
+      fp(head + ' ' + torso.replace(/^M184 104/, 'L184 104') + ' Z', `url(#${k}sk)`, SKIN[2], 1.5),
+      // rambut, telinga, mata
+      fp('M237 46 C 236 20, 214 6, 192 8 C 172 10, 160 21, 157 34 C 170 25, 194 23, 212 30 C 223 35, 230 45, 233 56 C 236 54, 237 50, 237 46 Z', '#5A3A2C', '#3E271D', 1),
+      fp('M212 40 C 222 38, 226 50, 222 58 C 219 63, 213 62, 212 58', SKIN[1], SKIN[2], 1.3),
+      fp('M166 39 C 169 37, 173 37, 175 40 C 172 42, 169 42, 166 39 Z', '#4A3026', '#4A3026', 0.8),
+      path('M163 33 C 167 30, 174 30, 178 32', { stroke: '#5A3A2C', sw: 1.6, cap: 'round' }),
+      o.cavity ? fp(o.cavity, `url(#${k}cv)`, 'none', 0) : '',
+    ].join('');
+  }
+  // Rongga mulut tampak samping: bibir, gigi, lidah (dipakai gambar pencernaan)
+  function mouthFig() {
+    return [
+      fp('M157 64 C 170 59, 188 58, 198 63 L 199 79 C 186 80, 170 79, 157 75 Z', '#8A2C38', '#5A1820', 1),
+      fp('M159 74 C 166 66, 186 65, 198 70 L 199 79 C 184 80, 168 79, 159 76 Z', '#E8939B', '#B4535F', 1),
+      fp('M157.6 63.4 L 161.6 62.8 L 161.4 68 Q 159.4 69 157.8 68 Z', '#FFFFFF', '#BFAF9F', 0.6),
+      fp('M157.8 76 L 161.4 76 L 161.4 71.6 Q 159.6 70.8 157.8 71.6 Z', '#FFFFFF', '#BFAF9F', 0.6),
+      fp('M168 62 L 176 61.4 L 176 64.6 Q 172 66 168 64.8 Z M178 61.4 L 186 61.2 L 186 64.2 Q 182 65.6 178 64.4 Z', '#FFFFFF', '#BFAF9F', 0.6),
+      fp('M152.2 63.2 C 154.4 63, 156.6 63.8, 157.8 65.2 C 156.2 67, 154 68, 152 68.6 Z', '#DE8A80', '#B9655C', 0.8),
+      fp('M152 69.8 C 154.4 70.4, 156.6 71.4, 157.8 72.8 C 156.4 74.8, 154.2 75.8, 152.4 75.8 Z', '#DE8A80', '#B9655C', 0.8),
+    ].join('');
+  }
   ORG.pencernaan = {
-    w: 380, h: 348, title: 'Organ pencernaan manusia',
-    base: () => [
-      ell(195, 28, 24, 11, { fill: '#E57373', stroke: '#A33', sw: 1.6 }), line(173, 28, 217, 28, { stroke: '#A33', sw: 1.4 }),
-      path('M195 40 C 195 80, 205 105, 218 128', { stroke: '#E8A87C', sw: 10, cap: 'round' }),
-      path('M100 118 C 130 100, 200 104, 214 124 C 216 140, 196 150, 170 156 C 140 162, 110 160, 100 146 Z', { fill: '#B5653A', stroke: '#7A3B1F', sw: 1.6 }),
-      path('M214 124 C 250 112, 290 130, 284 168 C 278 200, 240 210, 222 196 C 212 188, 226 176, 240 176 C 254 174, 258 156, 240 150 C 226 146, 218 140, 214 124 Z', { fill: '#F4A582', stroke: '#A0522D', sw: 1.8 }),
-      path('M186 206 C 210 200, 244 210, 270 202 C 276 212, 250 222, 216 220 C 198 220, 186 214, 186 206 Z', { fill: '#F7D08A', stroke: '#B08030', sw: 1.6 }),
-      path('M128 312 L128 248 Q 128 234 144 234 L252 234 Q 268 234 268 248 L268 312 Q 268 326 236 326 L208 326 L208 338', { stroke: '#C98E70', sw: 16, cap: 'round' }),
-      path('M168 252 C 150 256, 150 272, 168 274 C 186 276, 212 270, 230 274 C 250 278, 250 294, 230 296 C 210 298, 188 290, 168 296 C 150 300, 150 312, 170 314 C 190 316, 214 308, 232 312', { stroke: '#F0B38A', sw: 9, cap: 'round' }),
-    ].join(''),
+    w: 380, h: 400, title: 'Organ pencernaan manusia',
+    base: () => {
+      const k = gk();
+      const LIVER = 'M120 186 C 120 168, 150 156, 184 156 C 214 156, 242 160, 252 170 C 256 176, 250 180, 240 183 C 220 190, 196 202, 172 216 C 152 228, 128 226, 121 210 C 119 202, 120 194, 120 186 Z';
+      const STOM = 'M216 190 C 211 172, 230 160, 250 163 C 278 167, 296 190, 290 216 C 285 240, 262 254, 238 251 C 226 250, 216 246, 211 239 C 216 230, 232 229, 246 222 C 256 216, 253 204, 240 200 C 229 197, 220 197, 216 190 Z';
+      const PANC = 'M206 255 C 214 249, 238 255, 256 251 C 268 248, 284 246, 288 252 C 290 258, 276 262, 262 262 C 244 263, 226 268, 212 268 C 203 268, 200 260, 206 255 Z';
+      const COLON = 'M134 352 L 133 292 C 133 284, 137 280, 146 280 L 270 280 C 279 280, 284 284, 284 292 L 284 344 C 284 366, 256 370, 236 363 C 220 358, 208 362, 207 374 L 207 386';
+      const SMALL = 'M252 298 C 236 293, 200 302, 172 297 C 152 294, 150 309, 166 311 C 192 314, 224 304, 250 310 C 266 314, 266 326, 250 326 C 226 326, 196 320, 170 325 C 152 329, 152 342, 170 342 C 198 343, 226 336, 252 341 C 266 344, 262 356, 246 355 C 228 354, 214 350, 200 354';
+      const SMALL2 = 'M158 304 C 166 295, 178 318, 188 306 C 198 295, 206 318, 218 306 C 228 295, 238 318, 250 305 M160 334 C 170 323, 180 346, 192 334 C 202 323, 212 346, 224 334 C 234 323, 244 346, 258 333';
+      return [
+        defs([
+          mat(k + 'lv', ['#C0584A', '#8F2C22', '#5C1912']), mat(k + 'st', ['#F7B8B0', '#E48A86', '#B5585A']),
+          mat(k + 'pc', ['#FBE3A6', '#EFC46E', '#C69238']), mat(k + 'gb', ['#9BD38A', '#4E9E45', '#2E6B2A']),
+          rgrad(k + 'cv', [['0', '#E29C80', 0.55], ['0.65', '#E8AA8E', 0.3], ['1', '#F1C7AF', 0]], '50%', '50%', '50%'),
+        ].join('')),
+        bodyFig(k),
+        `<g clip-path="url(#${k}bc)"><ellipse cx="204" cy="270" rx="112" ry="132" fill="url(#${k}cv)"/></g>`,
+        mouthFig(),
+        // tekak dan kerongkongan
+        tube('M198 70 C 203 84, 204 100, 204 114 L 205 170 C 206 180, 209 186, 216 190', 10, ['#B4535F', '#E39A94', '#FBD7D2']),
+        // usus halus (berkelok) lalu usus besar membingkainya
+        tube(SMALL2, 9, ['#C77F67', '#EFAE96', '#FBDCCF']),
+        tube(SMALL, 10, ['#C2735A', '#F2B49B', '#FDE3D7']),
+        tube('M140 362 C 142 370, 146 376, 152 378', 5, ['#A86048', '#DE9C7E', null]),
+        tube(COLON, 21, ['#9C5A3E', '#D99C78', '#F3CDB4'], { bands: '1.6 8', bandOp: 0.4 }),
+        // usus dua belas jari, pankreas, lambung
+        tube('M212 241 C 199 243, 194 254, 197 264 C 200 272, 212 274, 222 270', 9, ['#C2735A', '#F2B49B', '#FDE3D7']),
+        shade(PANC, 1.5, 2), fp(PANC, `url(#${k}pc)`, '#A97A2C', 1.3),
+        path('M214 259 C 226 257, 238 260, 252 257 M258 255 C 268 253, 276 253, 282 253', { stroke: '#C69238', sw: 1, op: 0.7 }),
+        shade(STOM), fp(STOM, `url(#${k}st)`, '#9E4448', 1.5),
+        path('M236 176 C 262 176, 280 194, 278 218 M228 238 C 246 242, 266 234, 274 222 M240 186 C 258 190, 268 202, 266 218', { stroke: '#FBD1CC', sw: 1.4, cap: 'round', op: 0.85 }),
+        // hati dan kantong empedu
+        shade(LIVER), fp(LIVER, `url(#${k}lv)`, '#4A140F', 1.5),
+        path('M196 160 C 192 176, 186 192, 178 210', { stroke: '#5C1912', sw: 1.1, op: 0.55 }),
+        path('M140 176 C 160 166, 186 164, 210 166', { stroke: '#E07B6C', sw: 2, cap: 'round', op: 0.45 }),
+        fp('M174 206 C 176 200, 186 200, 188 206 C 190 214, 186 222, 181 222 C 176 222, 173 214, 174 206 Z', `url(#${k}gb)`, '#285E25', 1.1),
+      ].join('');
+    },
     pt: {
-      mulut: [195, 28, 116, 22], kerongkongan: [204, 84, 290, 58], hati: [140, 132, 40, 108], lambung: [262, 160, 346, 136],
-      pankreas: [250, 210, 346, 198], 'usus halus': [200, 282, 40, 292], 'usus besar': [128, 270, 40, 236], anus: [208, 338, 292, 334],
+      mulut: [168, 70, 34, 62], kerongkongan: [205, 140, 352, 128], hati: [150, 196, 34, 190], lambung: [272, 210, 352, 196],
+      pankreas: [266, 258, 352, 258], 'usus halus': [214, 324, 352, 322], 'usus besar': [134, 316, 34, 306], anus: [207, 388, 34, 384],
     },
   };
   ORG.jantung = {
-    w: 380, h: 282, title: 'Bagian-bagian jantung',
-    base: () => [
-      path('M178 92 C 178 40, 112 36, 94 66', { stroke: '#6F95E0', sw: 14, cap: 'round' }),
-      rect(130, 30, 20, 66, { rx: 6, fill: '#7FA7E8', stroke: '#3E64B5', sw: 1.4 }),
-      path('M112 140 L72 196', { stroke: '#7FA7E8', sw: 16, cap: 'round' }),
-      path('M212 92 C 212 30, 300 30, 300 80 L300 124', { stroke: '#E36A6A', sw: 18, cap: 'round' }),
-      path('M336 108 L284 112 M336 134 L284 134', { stroke: '#E88A8A', sw: 11, cap: 'round' }),
-      rect(110, 88, 85, 64, { rx: 18, fill: '#9EC1F2', stroke: '#3E64B5', sw: 2 }),
-      rect(199, 88, 86, 64, { rx: 18, fill: '#F4A3A3', stroke: '#B03A3A', sw: 2 }),
-      path('M110 154 L195 154 L195 256 C 160 244, 114 206, 110 154 Z', { fill: '#9EC1F2', stroke: '#3E64B5', sw: 2 }),
-      path('M199 154 L285 154 C 282 206, 240 248, 199 260 Z', { fill: '#F4A3A3', stroke: '#B03A3A', sw: 5 }),
-    ].join(''),
+    w: 380, h: 300, title: 'Bagian-bagian jantung',
+    base: () => {
+      const k = gk();
+      const BLU = ['#33539E', '#7D9BE0', '#C9D8FA'], RED = ['#8E2424', '#D9534F', '#F7B2A8'];
+      const HEART = 'M114 132 C 108 102, 136 88, 162 94 L 236 92 C 270 88, 298 110, 294 142 C 300 186, 282 230, 236 266 C 224 276, 210 280, 200 277 C 170 268, 132 228, 120 184 C 114 164, 114 148, 114 132 Z';
+      const RA = 'M126 130 C 124 112, 138 104, 156 106 C 172 108, 181 120, 181 136 C 181 152, 171 160, 156 160 C 138 160, 128 148, 126 130 Z';
+      const RV = 'M134 174 C 148 169, 168 168, 184 170 L 185 104 L 198 104 L 198 238 C 196 250, 188 256, 180 250 C 156 232, 138 202, 134 174 Z';
+      const LA = 'M226 112 C 240 102, 268 102, 280 116 C 286 130, 280 146, 266 150 C 250 154, 234 150, 226 140 Z';
+      const LV = 'M204 104 L 217 104 L 218 168 C 234 160, 262 160, 272 172 C 278 198, 266 232, 236 256 C 226 264, 214 262, 209 252 Z';
+      const vt = (x, y, w2) => fp(`M${x - w2} ${y} L ${x - w2 / 3} ${y + 7} L ${x} ${y} Z M${x} ${y} L ${x + w2 / 3} ${y + 7} L ${x + w2} ${y} Z`, '#FFF6EE', '#A0898A', 0.9);
+      return [
+        defs([
+          mat(k + 'my', ['#F08A80', '#C8494A', '#8A2328'], { cx: '40%', cy: '35%', r: '75%' }),
+          mat(k + 'bl', ['#B9CCF6', '#7D9BE0', '#4A68B5'], { cx: '45%', cy: '40%', r: '75%' }),
+          mat(k + 'rd', ['#FBC1B8', '#E9776F', '#B2423F'], { cx: '45%', cy: '40%', r: '75%' }),
+        ].join('')),
+        // di belakang jantung: vena cava bawah, aorta turun, nadi paru-paru, vena paru-paru
+        tube('M134 150 C 126 184, 118 236, 116 300', 20, BLU),
+        tube('M284 52 C 290 74, 292 102, 292 128', 20, RED),
+        tube('M191 74 C 170 64, 140 62, 108 68 M191 74 C 214 82, 300 64, 336 72', 15, BLU),
+        tube('M191 106 L 191 74', 15, BLU, { cap: 'butt' }),
+        // otot jantung dan ruang-ruangnya
+        shade(HEART, 3, 4, 0.18), fp(HEART, `url(#${k}my)`, '#6E1A1E', 1.6),
+        tube('M336 112 L 284 116 M336 134 L 284 132', 11, RED, { cap: 'butt' }),
+        path('M150 112 C 170 100, 196 98, 214 104', { stroke: '#F9B7AE', sw: 2.2, cap: 'round', op: 0.4 }),
+        fp(RA, `url(#${k}bl)`, '#2E4B92', 1.3), fp(RV, `url(#${k}bl)`, '#2E4B92', 1.3),
+        fp(LA, `url(#${k}rd)`, '#8A2A2A', 1.3), fp(LV, `url(#${k}rd)`, '#8A2A2A', 1.3),
+        // katup: trikuspidal, bikuspidal, katup nadi paru-paru, katup aorta
+        vt(158, 163, 18), vt(249, 155, 16), vt(191.5, 108, 6), vt(210.5, 108, 6),
+        // pembuluh di depan: vena cava atas dan aorta
+        tube('M152 18 L 152 110', 21, BLU, { cap: 'butt' }),
+        tube('M210.5 106 L 210.5 62 C 214 24, 270 18, 284 54', 21, RED, { cap: 'butt' }),
+        tube('M226 38 L 222 6 M246 28 L 246 4 M264 30 L 270 6', 9, RED),
+      ].join('');
+    },
     pt: {
-      'serambi kanan': [150, 118, 40, 110], 'bilik kanan': [160, 196, 40, 216], 'serambi kiri': [244, 124, 352, 186],
-      'bilik kiri': [238, 204, 330, 246], aorta: [262, 40, 316, 14], 'arteri pulmonalis': [116, 48, 54, 22],
-      'vena cava': [140, 62, 190, 14], 'vena pulmonalis': [318, 121, 352, 92],
+      'serambi kanan': [154, 134, 34, 128], 'bilik kanan': [166, 212, 34, 216], 'serambi kiri': [252, 128, 352, 166],
+      'bilik kiri': [242, 216, 352, 240], aorta: [248, 24, 352, 24], 'arteri pulmonalis': [124, 66, 34, 76],
+      'vena cava': [152, 40, 34, 30], 'vena pulmonalis': [312, 113, 352, 100],
     },
   };
   // marks: [[bagian, label], ...]
@@ -4950,21 +5149,71 @@ const IPF = (() => {
   }
 
   /* -------------------------------------------------------- Tata surya */
+  /* ----------------------------------------------- Benda langit berbayang */
   const PLANETS = [
-    ['Merkurius', 3.5, '#9E9E9E'], ['Venus', 5.5, '#E8C07D'], ['Bumi', 6, '#4A90D9'], ['Mars', 4.5, '#D2603A'],
-    ['Jupiter', 13, '#D9A066'], ['Saturnus', 11, '#E6C98A'], ['Uranus', 8, '#8FD3D8'], ['Neptunus', 7.5, '#4B6FD8'],
+    ['Merkurius', 3.5, '#A8A39C'], ['Venus', 5.5, '#E9C88C'], ['Bumi', 6, '#3D8BE0'], ['Mars', 4.5, '#D4643C'],
+    ['Jupiter', 13, '#D9A066'], ['Saturnus', 11, '#E6C98A'], ['Uranus', 8, '#9FE3E8'], ['Neptunus', 7.5, '#4F74E0'],
   ];
+  // langit malam berbintang (posisi bintang tetap)
+  const STARS = [[12, 18, 0.9, 0.8], [47, 6, 0.6, 0.5], [83, 27, 1.1, 0.9], [131, 12, 0.7, 0.6], [158, 44, 0.5, 0.45], [22, 61, 0.6, 0.55], [66, 79, 1, 0.75], [109, 58, 0.5, 0.4], [143, 92, 0.9, 0.8], [36, 104, 0.5, 0.5], [93, 118, 0.7, 0.6], [171, 121, 0.6, 0.5], [7, 131, 1, 0.7]];
+  function sky(k, W, H) {
+    // ubin bintang berulang (hemat ukuran dibanding bintang satu per satu)
+    return `${lgrad(k + 'sp', [['0', '#0A1230'], ['1', '#1A2A5E']], 0, 0, 1, 1)}<pattern id="${k}st" width="180" height="136" patternUnits="userSpaceOnUse">${STARS.map(([x, y, r, o]) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#FFFFFF" opacity="${o}"/>`).join('')}</pattern><rect x="0" y="0" width="${W}" height="${H}" fill="url(#${k}sp)"/><rect x="0" y="0" width="${W}" height="${H}" fill="url(#${k}st)"/>`;
+  }
+  // gradasi bersama: matahari, cahaya korona, bayangan bola (disinari dari kiri)
+  const skyDefs = (k) => [
+    rgrad(k + 'su', [['0', '#FFFBE0'], ['0.35', '#FFE477'], ['0.8', '#FFB300'], ['1', '#F57C00']], '50%', '50%', '50%'),
+    rgrad(k + 'gl', [['0.62', '#FFC94D', 0.6], ['0.8', '#FF9F1C', 0.18], ['1', '#FF8F00', 0]], '50%', '50%', '50%'),
+    rgrad(k + 'sh', [['0', '#FFFFFF', 0.4], ['0.28', '#FFFFFF', 0], ['0.62', '#000000', 0.06], ['1', '#000000', 0.62]], '30%', '38%', '78%'),
+    lgrad(k + 'ju', [['0', '#E8D2B0'], ['0.18', '#C99A6B'], ['0.3', '#F0DFC2'], ['0.45', '#B9844F'], ['0.56', '#EAD3AE'], ['0.7', '#C28C5C'], ['0.85', '#F2E2C8'], ['1', '#D3AE82']]),
+    lgrad(k + 'sa', [['0', '#F3E3B5'], ['0.3', '#DCC08A'], ['0.5', '#F0DDB0'], ['0.72', '#D2B27A'], ['1', '#EAD7A8']]),
+    lgrad(k + 'ld', [['0', '#7CC655'], ['1', '#3E8E2F']]),
+  ].join('');
+  const sunG = (k, x, y, r) => `<circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r * 1.5)}" fill="url(#${k}gl)"/><circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r)}" fill="url(#${k}su)"/>`;
+  const ball = (k, x, y, r, fill) => `<circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r)}" fill="${fill}"/>`;
+  const shadeBall = (k, x, y, r) => `<circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r)}" fill="url(#${k}sh)"/>`;
+  // bumi: lautan, daratan, awan (skala mengikuti jari-jari)
+  function earthG(k, x, y, r, o = {}) {
+    const c = gk(); const u = r / 70;
+    const P = (d) => d.replace(/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g, (_, a, b) => `${n2(x + a * u)} ${n2(y + b * u)}`);
+    const land = [
+      'M-50,-38 C-30,-58 10,-62 40,-50 C52,-44 50,-30 38,-24 C28,-20 22,-8 10,-10 C-2,-12 -8,-2 -18,-6 C-30,-10 -34,-22 -46,-24 C-56,-26 -58,-32 -50,-38 Z',
+      'M-14,-8 C-8,2 -6,10 -10,18 C-16,8 -20,0 -14,-8 Z',
+      'M18,38 C30,30 50,32 54,44 C56,56 40,60 28,56 C18,52 12,46 18,38 Z',
+      'M-68,-8 C-56,-12 -46,-4 -44,10 C-42,26 -52,40 -58,46 C-64,30 -70,14 -68,-8 Z',
+      'M2,18 C8,15 16,17 20,20 C14,22 8,22 2,18 Z M24,22 C30,19 38,20 42,24 C36,26 30,26 24,22 Z M12,28 C18,26 24,27 28,30 C22,32 16,31 12,28 Z',
+    ];
+    let s = `<clipPath id="${c}"><circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r)}"/></clipPath>`;
+    s += `<circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r)}" fill="#2F7FD6"/>`;
+    s += `<g clip-path="url(#${c})">${land.map((d) => `<path d="${P(d)}" fill="url(#${k}ld)"/>`).join('')}`;
+    if (r > 20) s += ['M-40,-60 C-20,-66 0,-64 18,-58', 'M-60,30 C-48,26 -36,28 -24,34', 'M30,0 C42,-4 54,-2 64,4', 'M-20,50 C-6,46 8,48 20,54'].map((d) => `<path d="${P(d)}" fill="none" stroke="#FFFFFF" stroke-width="${n2(3.2 * u)}" stroke-linecap="round" opacity="0.55"/>`).join('');
+    if (o.night) s += `<rect x="${n2(x - r)}" y="${n2(y - r)}" width="${n2(2 * r)}" height="${n2(2 * r)}" fill="url(#${o.night})"/>`;
+    s += '</g>' + shadeBall(k, x, y, r) + `<circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(r)}" fill="none" stroke="#1E4E92" stroke-width="${n2(Math.max(0.6, 1.4 * u))}"/>`;
+    return s;
+  }
+  function moonG(k, x, y, r, col = '#C9C6C0') {
+    return ball(k, x, y, r, col) + [[-0.3, -0.25, 0.22], [0.25, 0.1, 0.16], [-0.1, 0.35, 0.13], [0.35, -0.35, 0.1]].map(([a, b, c]) => `<circle cx="${n2(x + a * r)}" cy="${n2(y + b * r)}" r="${n2(c * r)}" fill="#000000" opacity="0.13"/>`).join('') + shadeBall(k, x, y, r);
+  }
+  function planetG(k, i, x, y) {
+    const [nm, pr, col] = PLANETS[i];
+    if (nm === 'Bumi') return earthG(k, x, y, pr);
+    if (nm === 'Jupiter') return ball(k, x, y, pr, `url(#${k}ju)`) + `<ellipse cx="${n2(x + pr * 0.3)}" cy="${n2(y + pr * 0.28)}" rx="${n2(pr * 0.24)}" ry="${n2(pr * 0.13)}" fill="#B9583A" opacity="0.85"/>` + shadeBall(k, x, y, pr);
+    if (nm === 'Saturnus') {
+      const ring = (half) => `<path d="M${n2(x - pr * 2.1)} ${n2(y)} A ${n2(pr * 2.1)} ${n2(pr * 0.62)} 0 0 ${half ? 0 : 1} ${n2(x + pr * 2.1)} ${n2(y)}" fill="none" stroke="#E9D9B0" stroke-width="2.6" opacity="0.92" transform="rotate(-14 ${n2(x)} ${n2(y)})"/><path d="M${n2(x - pr * 1.62)} ${n2(y)} A ${n2(pr * 1.62)} ${n2(pr * 0.46)} 0 0 ${half ? 0 : 1} ${n2(x + pr * 1.62)} ${n2(y)}" fill="none" stroke="#BFA678" stroke-width="1.6" opacity="0.92" transform="rotate(-14 ${n2(x)} ${n2(y)})"/>`;
+      return ring(false) + ball(k, x, y, pr, `url(#${k}sa)`) + shadeBall(k, x, y, pr) + ring(true);
+    }
+    return ball(k, x, y, pr, col) + shadeBall(k, x, y, pr);
+  }
   function solar(tags) {
     // tags: { indexPlanet(0..7): 'label' }
-    const W = 480, H = 230, sx = -64, sy = 115;
-    let body = rect(0, 0, W, H, { fill: '#0F1B3D', stroke: 'none', sw: 0 }) + circ(sx, sy, 80, { fill: '#FFC107', stroke: '#FF9800', sw: 3 });
+    const k = gk(); const W = 480, H = 230, sx = -64, sy = 115;
+    let body = defs(skyDefs(k)) + sky(k, W, H) + sunG(k, sx, sy, 80);
     const R = [94, 120, 148, 176, 236, 300, 372, 434];
     const ANG = [-0.55, 0.42, -0.2, 0.5, -0.32, 0.28, -0.12, 0.2];
-    R.forEach((r, i) => { body += path(`M${n2(sx + r * Math.cos(-0.82))} ${n2(sy + r * Math.sin(-0.82))} A ${r} ${r} 0 0 1 ${n2(sx + r * Math.cos(0.82))} ${n2(sy + r * Math.sin(0.82))}`, { stroke: '#5C6B99', sw: 1, dash: '3 4' }); });
-    PLANETS.forEach(([nm, pr, col], i) => {
+    R.forEach((r) => { body += path(`M${n2(sx + r * Math.cos(-0.82))} ${n2(sy + r * Math.sin(-0.82))} A ${r} ${r} 0 0 1 ${n2(sx + r * Math.cos(0.82))} ${n2(sy + r * Math.sin(0.82))}`, { stroke: '#7F8DB8', sw: 1, dash: '3 4', op: 0.7 }); });
+    PLANETS.forEach(([nm, pr], i) => {
       const a = ANG[i] * (i < 4 ? 1 : 0.6), x = sx + R[i] * Math.cos(a), y = sy + R[i] * Math.sin(a);
-      if (nm === 'Saturnus') body += ell(x, y, pr * 1.9, pr * 0.55, { stroke: '#F3E2B3', sw: 2.4 });
-      body += circ(x, y, pr, { fill: col, stroke: 'none', sw: 0 });
+      body += planetG(k, i, x, y);
       if (tags[i]) body += `${line(x, y - pr - 2, x, y - pr - 16, { stroke: '#FFFFFF', sw: 1.2 })}${tag(x, y - pr - 28, tags[i])}`;
     });
     return wrap(W, H, body, 'Susunan tata surya');
@@ -4973,23 +5222,24 @@ const IPF = (() => {
   /* ----------------------------------------------------------- Gerhana */
   // kind 'matahari' | 'bulan'; marks: { posisiBenda: label } atau wilayah umbra/penumbra
   function eclipse(kind, o = {}) {
-    const W = 460, H = 220, cy = 110;
-    let body = rect(0, 0, W, H, { fill: '#0F1B3D', stroke: 'none', sw: 0 });
+    const k = gk(); const W = 460, H = 220, cy = 110;
+    let body = defs(skyDefs(k)) + sky(k, W, H);
     const sun = [50, cy, 46];
+    body += sunG(k, ...sun);
     if (kind === 'matahari') {
       const moon = [230, cy, 11], earth = [390, cy, 42];
-      body += poly([[moon[0], cy - 11], [earth[0] - 40, cy - 34], [earth[0] - 40, cy + 34], [moon[0], cy + 11]], { fill: '#5C6B99', stroke: 'none', sw: 0 });
-      body += poly([[moon[0], cy - 11], [earth[0] - 40, cy - 6], [earth[0] - 40, cy + 6], [moon[0], cy + 11]], { fill: '#1A1A1A', stroke: 'none', sw: 0 });
-      body += circ(...sun, { fill: '#FFC107', stroke: '#FF9800', sw: 3 }) + circ(...earth, { fill: '#4A90D9', stroke: '#2E6DB5', sw: 2 }) + circ(...moon, { fill: '#BDBDBD', stroke: '#757575', sw: 1.4 });
+      body += poly([[moon[0], cy - 11], [earth[0] - 40, cy - 34], [earth[0] - 40, cy + 34], [moon[0], cy + 11]], { fill: '#8C9BC7', stroke: 'none', sw: 0 }).replace('/>', ' opacity="0.42"/>');
+      body += poly([[moon[0], cy - 11], [earth[0] - 40, cy - 6], [earth[0] - 40, cy + 6], [moon[0], cy + 11]], { fill: '#04060E', stroke: 'none', sw: 0 });
+      body += earthG(k, ...earth) + moonG(k, ...moon);
       if (o.region) {
         body += pointer(earth[0] - 41, cy, earth[0] - 6, cy + 66, o.region.umbra, '#FFFFFF');
         body += pointer(earth[0] - 36, cy - 26, earth[0] - 6, cy - 72, o.region.penumbra, '#FFFFFF');
       }
     } else {
       const earth = [240, cy, 34], moon = [400, cy, 12];
-      body += poly([[earth[0], cy - 34], [430, cy - 14], [430, cy + 14], [earth[0], cy + 34]], { fill: '#1A1A1A', stroke: 'none', sw: 0 });
-      body += poly([[earth[0], cy - 34], [430, cy - 52], [430, cy - 14]], { fill: '#3B4675', stroke: 'none', sw: 0 }) + poly([[earth[0], cy + 34], [430, cy + 52], [430, cy + 14]], { fill: '#3B4675', stroke: 'none', sw: 0 });
-      body += circ(...sun, { fill: '#FFC107', stroke: '#FF9800', sw: 3 }) + circ(...earth, { fill: '#4A90D9', stroke: '#2E6DB5', sw: 2 }) + circ(...moon, { fill: '#8D6E63', stroke: '#5D4037', sw: 1.4 });
+      body += poly([[earth[0], cy - 34], [430, cy - 52], [430, cy - 14]], { fill: '#8C9BC7', stroke: 'none', sw: 0 }).replace('/>', ' opacity="0.35"/>') + poly([[earth[0], cy + 34], [430, cy + 52], [430, cy + 14]], { fill: '#8C9BC7', stroke: 'none', sw: 0 }).replace('/>', ' opacity="0.35"/>');
+      body += poly([[earth[0], cy - 34], [430, cy - 14], [430, cy + 14], [earth[0], cy + 34]], { fill: '#04060E', stroke: 'none', sw: 0 });
+      body += earthG(k, ...earth) + moonG(k, moon[0], moon[1], moon[2], '#9C5A44');
     }
     const names = o.names || {};
     const pos = kind === 'matahari' ? { matahari: 50, bulan: 230, bumi: 390 } : { matahari: 50, bumi: 240, bulan: 400 };
@@ -4999,12 +5249,10 @@ const IPF = (() => {
 
   /* -------------------------------------------------- Rotasi bumi */
   function rotation(o = {}) {
-    const W = 420, H = 220, ex = 270, ey = 110, r = 70;
-    let body = rect(0, 0, W, H, { fill: '#0F1B3D', stroke: 'none', sw: 0 }) + circ(-30, ey, 80, { fill: '#FFC107', stroke: '#FF9800', sw: 3 });
+    const k = gk(); const W = 420, H = 220, ex = 270, ey = 110, r = 70;
+    let body = defs(skyDefs(k) + lgrad(k + 'nt', [['0', '#040A20', 0], ['0.47', '#040A20', 0], ['0.6', '#040A20', 0.74], ['1', '#040A20', 0.84]], 0, 0, 1, 0)) + sky(k, W, H) + sunG(k, -30, ey, 80);
     [-50, -20, 10, 40].forEach((dy) => { body += arrow(66, ey + dy, 180, ey + dy * 0.6, { stroke: '#FFE082', sw: 1.6 }); });
-    body += circ(ex, ey, r, { fill: '#4A90D9', stroke: '#2E6DB5', sw: 2 });
-    body += path(`M${ex} ${ey - r} A ${r} ${r} 0 0 1 ${ex} ${ey + r} Z`, { fill: '#0B1330', stroke: 'none', sw: 0, op: 0.72 });
-    body += path(`M${ex - 40} ${ey - 30} q 14 -10 24 4 q 10 14 -4 26 q -16 6 -20 -14 z M${ex + 10} ${ey + 20} q 18 -8 26 6 q -4 16 -22 10 z`, { fill: '#7CB342', stroke: 'none', sw: 0 });
+    body += earthG(k, ex, ey, r, { night: k + 'nt' });
     body += line(ex - 18, ey - r - 22, ex + 18, ey + r + 22, { stroke: '#FFFFFF', sw: 1.6, dash: '5 4' });
     body += path(`M${ex - 66} ${ey + 40} A 80 26 0 0 0 ${ex + 66} ${ey + 40}`, { stroke: '#FFFFFF', sw: 2 }) + SVG.arrow(ex + 58, ey + 50, ex + 68, ey + 38, { stroke: '#FFFFFF', sw: 2 });
     if (o.marks) Object.entries(o.marks).forEach(([side, lab]) => { const px = side === 'siang' ? ex - 40 : ex + 40; body += circ(px, ey - 6, 4, { fill: '#FFFFFF', stroke: '#000', sw: 1 }) + tag(px, ey - 30, lab); });
@@ -5024,16 +5272,49 @@ const IPF = (() => {
   /* ----------------------------------------------- Kacamata/penglihatan */
   function focus(kind) {
     // titik fokus bayangan jatuh di depan (miopi) atau di belakang (hipermetropi) retina
-    const W = 380, H = 190, cx = 220, cy = 95, R = 70;
-    let body = circ(cx, cy, R, { fill: '#F4F9FF', stroke: C.line, sw: 2.6 }) + path(`M${cx + 40} ${cy - 57} A 70 70 0 0 1 ${cx + 40} ${cy + 57}`, { stroke: '#D9534F', sw: 4 }) + ell(cx - 52, cy, 9, 22, { fill: '#CDE6FA', stroke: C.line, sw: 1.4 });
-    const fx = kind === 'miopi' ? cx + 30 : cx + 110;
-    [-14, 14].forEach((dy) => { body += line(20, cy + dy, cx - 52, cy + dy, { stroke: '#E3A008', sw: 2 }) + line(cx - 52, cy + dy, fx, cy, { stroke: '#E3A008', sw: 2 }); });
-    if (kind === 'miopi') [-14, 14].forEach((dy) => { body += line(fx, cy, cx + 66, cy - dy * 0.9, { stroke: '#E3A008', sw: 2, dash: '4 3' }); });
-    body += circ(fx, cy, 3.5, { fill: '#C8352B', stroke: 'none', sw: 0 }) + t(fx, cy + (kind === 'miopi' ? 22 : -14), 'titik bayangan', { size: 11, fill: '#C8352B' }) + t(cx + 66, cy + R + 18, 'retina', { size: 11, fill: C.muted });
+    const k = gk(); const W = 380, H = 190, cx = 220, cy = 95, R = 70;
+    let body = defs([
+      rgrad(k + 'vi', [['0', '#FFFFFF'], ['0.7', '#F3F8FC'], ['1', '#DCE8F2']], '45%', '45%', '60%'),
+      rgrad(k + 'sc', [['0', '#FFFFFF'], ['0.82', '#F4F1EC'], ['1', '#D9D2C7']], '42%', '38%', '62%'),
+      rgrad(k + 'ln', [['0', '#FFFFFF'], ['0.6', '#E2F1FB'], ['1', '#A9CDEA']], '38%', '35%', '70%'),
+    ].join(''));
+    body += `<circle cx="${cx}" cy="${cy}" r="${R}" fill="url(#${k}sc)" stroke="#9E978C" stroke-width="1.3"/><circle cx="${cx}" cy="${cy}" r="${R - 6}" fill="#8A3A2E"/>`;
+    body += path(arcP(cx, cy, R - 8.5, -126, 126), { stroke: '#E8836A', sw: 4 }) + `<circle cx="${cx}" cy="${cy}" r="${R - 10.5}" fill="url(#${k}vi)"/>`;
+    body += fp(`M158.2 62.1 A 50.5 50.5 0 0 0 158.2 127.9 L 166 125 C 158 110, 158 80, 166 65 Z`, '#E5F3FC', '#5B9BD5', 1.2);
+    body += fp('M162 66 L 167 66 L 167.5 84 L 162.5 84 Z M162 124 L 167 124 L 167.5 106 L 162.5 106 Z', '#6B4423', '#3E2410', 0.8);
+    body += `<ellipse cx="${cx - 48}" cy="${cy}" rx="8.5" ry="22" fill="url(#${k}ln)" stroke="#5B8DB8" stroke-width="1.2"/>`;
+    const lx = cx - 48, fx = kind === 'miopi' ? cx + 30 : cx + 110;
+    [-14, 14].forEach((dy) => { body += line(20, cy + dy, lx, cy + dy, { stroke: '#E3A008', sw: 2.2 }) + line(lx, cy + dy, fx, cy, { stroke: '#E3A008', sw: 2.2 }); });
+    if (kind === 'miopi') [-14, 14].forEach((dy) => { body += line(fx, cy, cx + 58, cy - dy * 0.9, { stroke: '#E3A008', sw: 2, dash: '4 3' }); });
+    body += circ(fx, cy, 3.8, { fill: '#C8352B', stroke: '#FFFFFF', sw: 1 }) + t(fx, cy + (kind === 'miopi' ? 24 : -14), 'titik bayangan', { size: 11, fill: '#C8352B', weight: 'bold' }) + t(cx + 66, cy + R + 18, 'retina', { size: 11, fill: C.muted });
     return wrap(W, H + 8, body, 'Jatuhnya bayangan pada mata');
   }
 
-  return { organ, ORG, panel, chain, web, cycle, muscles, joints, wujud, rays, bars, bottles, solar, PLANETS, eclipse, rotation, ramp, focus, DRAW, emo, tag, pointer };
+  /* ------------------------------------------------ Resep gambar (hemat tautan) */
+  // Setiap gambar soal menyimpan "resep" (nama fungsi + argumen). Tautan siswa cukup
+  // membawa resep; gambar digambar ulang di perangkat siswa dengan label yang sama.
+  const FIGS = { organ, panel, chain, web, cycle, muscles, joints, wujud, rays, bars, bottles, solar, eclipse, rotation, ramp, focus };
+  const R = {};
+  Object.keys(FIGS).forEach((fn) => {
+    R[fn] = (...args) => {
+      const a = args.slice(); while (a.length && a[a.length - 1] === undefined) a.pop();
+      return { svg: FIGS[fn](...args), fig: { fn, args: JSON.parse(JSON.stringify(a)) } };
+    };
+  });
+  function render(fig) {
+    if (!fig || !Object.prototype.hasOwnProperty.call(FIGS, fig.fn) || !Array.isArray(fig.args)) return '';
+    try { return FIGS[fig.fn](...fig.args.map((x) => (x === null ? undefined : x))); } catch (e) { return ''; }
+  }
+  // samakan id acak agar dua gambar dari resep yang sama dapat dibandingkan
+  function normSvg(svg) {
+    const ids = []; String(svg || '').replace(/\sid="([^"]+)"/g, (_, id) => { ids.push(id); return ''; });
+    let out = String(svg || '');
+    ids.forEach((id, i) => { out = out.split('"' + id + '"').join('"#' + i + '"').split('#' + id + ')').join('#' + i + ')').split('"#' + id + '"').join('"##' + i + '"'); });
+    return out;
+  }
+  const sameAsRecipe = (v) => !!(v && v.fig && v.svg && normSvg(render(v.fig)) === normSvg(v.svg));
+
+  return { organ, ORG, panel, chain, web, cycle, muscles, joints, wujud, rays, bars, bottles, solar, PLANETS, eclipse, rotation, ramp, focus, DRAW, emo, tag, pointer, R, render, normSvg, sameAsRecipe };
 })();
 
 /* ===== 35_ipa_bio.js ===== */
@@ -5050,7 +5331,8 @@ const IPA = (() => {
   const NUM = ['1', '2', '3', '4', '5', '6', '7', '8'];
   const nb = (i) => `(${NUM[i]})`;
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-  const svgV = (svg) => [{ type: 'svg', svg }];
+  // gambar dari IPF.R membawa resep (fig) agar tautan siswa tetap pendek
+  const svgV = (x) => [typeof x === 'string' ? { type: 'svg', svg: x } : { type: 'svg', svg: x.svg, fig: x.fig }];
   const join = (arr) => (arr.length <= 1 ? arr.join('') : arr.slice(0, -1).join(', ') + (arr.length > 2 ? ', dan ' : ' dan ') + arr[arr.length - 1]);
   // Opsi kombinasi nomor, mis. "(1) dan (3)".
   const combo = (idx) => join(idx.slice().sort((a, b) => a - b).map(nb));
@@ -5141,7 +5423,7 @@ const IPA = (() => {
         r.shuffle(names).forEach((x) => { if (parts.length < 4 && !parts.some((y) => near(y).has(x))) parts.push(x); });
         return { marks: parts.map((pt, i) => [pt, L4[i]]) };
       },
-      stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Perhatikan gambar ${P.nama} berikut!`, visuals: svgV(IPF.organ(P.fig, p.marks)) }),
+      stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Perhatikan gambar ${P.nama} berikut!`, visuals: svgV(IPF.R.organ(P.fig, p.marks)) }),
       qs: [
         { id: 'fn2tag', code: P.code, level: 'Pemahaman', type: 'pg', ind: `Menentukan bagian ${P.nama} berdasarkan fungsinya`, make: (p, r) => {
           const [pt, lab] = r.pick(p.marks);
@@ -5184,7 +5466,7 @@ const IPA = (() => {
         const labs = r.shuffle(L4.slice(0, 4));
         return { marks: seq.map((pt, i) => [pt, labs[i]]) };
       },
-      stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Perhatikan gambar ${P.nama} berikut!`, visuals: svgV(IPF.organ(P.fig, p.marks)) }),
+      stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Perhatikan gambar ${P.nama} berikut!`, visuals: svgV(IPF.R.organ(P.fig, p.marks)) }),
       qs: [
         { id: 'urut', code: P.code, level: 'Penalaran', type: 'pg', ind: `Menentukan urutan proses pada ${P.nama}`, make: (p, r) => {
           const right = p.marks.map((m) => m[1]);
@@ -5221,7 +5503,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-mata-fokus', codes: ['IPA-01'], ind: 'Menganalisis gangguan penglihatan berdasarkan gambar jatuhnya bayangan',
     params: (r) => ({ d: r.pick(EYE.slice(0, 2)) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Gambar berikut menunjukkan jatuhnya bayangan benda pada mata seseorang.', visuals: svgV(IPF.focus(p.d.fig)) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Gambar berikut menunjukkan jatuhnya bayangan benda pada mata seseorang.', visuals: svgV(IPF.R.focus(p.d.fig)) }),
     qs: [
       { id: 'fokus', code: 'IPA-01', level: 'Penalaran', type: 'pg', ind: 'Menganalisis gangguan mata dan cara mengatasinya berdasarkan gambar', make: (p, r) => {
         const o = EYE[0] === p.d ? EYE[1] : EYE[0];
@@ -5280,7 +5562,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-daur', codes: ['IPA-03'], ind: 'Menganalisis tahapan daur hidup hewan berdasarkan gambar',
     params: (r) => { const a = r.pick(Object.keys(CYC)); const C0 = CYC[a]; const fi = C0.st.findIndex((s) => s.cap === C0.fact[0]); return { a, x: fi }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Perhatikan gambar daur hidup ${p.a} berikut!`, visuals: svgV(IPF.cycle(CYC[p.a].st.map((s, i) => Object.assign({}, s, i === p.x ? { cap: '', tag: 'X' } : {})))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Perhatikan gambar daur hidup ${p.a} berikut!`, visuals: svgV(IPF.R.cycle(CYC[p.a].st.map((s, i) => Object.assign({}, s, i === p.x ? { cap: '', tag: 'X' } : {})))) }),
     qs: [
       { id: 'nama', code: 'IPA-03', level: 'Pemahaman', type: 'pg', ind: 'Menentukan nama tahap daur hidup hewan', make: (p, r) => {
         const C0 = CYC[p.a]; const ans = C0.st[p.x].cap;
@@ -5318,7 +5600,7 @@ const IPA = (() => {
       const a = r.sample(ANI.filter((x) => x.m === types[0]), 2), b = r.sample(ANI.filter((x) => x.m === types[1]), 2), c = r.sample(ANI.filter((x) => x.m === types[2]), 1);
       return { items: r.shuffle(a.concat(b, c)), main: types[0] };
     },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa hewan berikut!', visuals: svgV(IPF.panel(p.items.map((x, i) => ({ icon: x.icon, draw: x.draw, cap: x.n, tag: nb(i) })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa hewan berikut!', visuals: svgV(IPF.R.panel(p.items.map((x, i) => ({ icon: x.icon, draw: x.draw, cap: x.n, tag: nb(i) })))) }),
     qs: [
       { id: 'sama', code: 'IPA-03', level: 'Penerapan', type: 'pg', ind: 'Menentukan hewan yang memiliki kesamaan tahapan daur hidup', make: (p, r) => {
         const idx = p.items.map((x, i) => (x.m === p.main ? i : -1)).filter((i) => i >= 0);
@@ -5356,7 +5638,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-sda-jenis', codes: ['IPA-04'], ind: 'Mengidentifikasi sumber daya alam yang dapat dan tidak dapat diperbarui',
     params: (r) => ({ items: r.shuffle(r.sample(SDA.filter((x) => x.re), 3).concat(r.sample(SDA.filter((x) => !x.re), 2))) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa sumber daya alam berikut!', visuals: svgV(IPF.panel(p.items.map((x, i) => ({ icon: x.icon, cap: x.n, tag: nb(i) })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa sumber daya alam berikut!', visuals: svgV(IPF.R.panel(p.items.map((x, i) => ({ icon: x.icon, cap: x.n, tag: nb(i) })))) }),
     qs: [
       { id: 'tidak', code: 'IPA-04', level: 'Pemahaman', type: 'pg', ind: 'Mengidentifikasi sumber daya alam yang tidak dapat diperbarui', make: (p, r) => {
         const idx = p.items.map((x, i) => (!x.re ? i : -1)).filter((i) => i >= 0);
@@ -5416,7 +5698,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-lingkungan', codes: ['IPA-05'], ind: 'Menentukan upaya pelestarian lingkungan berdasarkan masalah tertentu',
     params: (r) => ({ e: r.int(0, ENV.length - 1) }),
-    stimulus: (p) => { const E = ENV[p.e]; return { title: '', kind: 'Gambar', text: E.txt, visuals: svgV(IPF.panel(E.scene.map(([ic, c]) => Object.assign(typeof ic === 'string' ? { icon: ic } : ic, { cap: c })), { cw: 124 })) }; },
+    stimulus: (p) => { const E = ENV[p.e]; return { title: '', kind: 'Gambar', text: E.txt, visuals: svgV(IPF.R.panel(E.scene.map(([ic, c]) => Object.assign(typeof ic === 'string' ? { icon: ic } : ic, { cap: c })), { cw: 124 })) }; },
     qs: [
       { id: 'upaya', code: 'IPA-05', level: 'Penerapan', type: 'pg', ind: 'Menentukan upaya mengatasi kerusakan lingkungan', make: (p, r) => { const E = ENV[p.e]; const c = r.pick(E.good);
         return pg(r, { text: 'Upaya yang tepat untuk mengatasi masalah tersebut adalah … .', correct: c, wrong: r.sample(E.bad, 3), explain: `Upaya yang tepat adalah **${c}**. Pilihan lainnya justru memperparah kerusakan lingkungan.` }); } },
@@ -5532,7 +5814,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-gizi', codes: ['IPA-07'], ind: 'Mengelompokkan makanan berdasarkan kandungan zat gizinya',
     params: (r) => { const z = r.pick(['karbohidrat', 'protein']); const a = r.sample(FOOD.filter((x) => x.z === z), 2); const b = r.sample(FOOD.filter((x) => x.z !== z), 3); return { z, items: r.shuffle(a.concat(b)) }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa jenis makanan berikut!', visuals: svgV(IPF.panel(p.items.map((x, i) => ({ icon: x.icon, cap: x.n, tag: nb(i) })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa jenis makanan berikut!', visuals: svgV(IPF.R.panel(p.items.map((x, i) => ({ icon: x.icon, cap: x.n, tag: nb(i) })))) }),
     qs: [
       { id: 'sumber', code: 'IPA-07', level: 'Pemahaman', type: 'pg', ind: 'Menentukan makanan sumber zat gizi tertentu', make: (p, r) => { const idx = p.items.map((x, i) => (x.z === p.z ? i : -1)).filter((i) => i >= 0);
         return pg(r, { text: `Makanan yang merupakan sumber ${p.z} ditunjukkan nomor … .`, correct: combo(idx), wrong: comboWrongs(r, idx, 5, 2), order: 'text', explain: `${cap(join(idx.map((i) => p.items[i].n)))} banyak mengandung ${p.z}, yang berfungsi ${ZF[p.z]}. Jawabannya **${combo(idx)}**.` }); } },
@@ -5551,7 +5833,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-otot', codes: ['IPA-09'], ind: 'Mengidentifikasi jenis otot berdasarkan gambar',
     params: (r) => { const tags = r.shuffle(['P', 'Q', 'R']); const kinds = r.shuffle(['polos', 'lurik', 'jantung']); return { m: kinds.map((k, i) => ({ kind: k, tag: tags[i] })).sort((a, b) => a.tag.localeCompare(b.tag)) }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar jenis-jenis otot berikut!', visuals: svgV(IPF.muscles(p.m)) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar jenis-jenis otot berikut!', visuals: svgV(IPF.R.muscles(p.m)) }),
     qs: [
       { id: 'lokasi', code: 'IPA-09', level: 'Penerapan', type: 'pg', ind: 'Menentukan letak otot berdasarkan gambar', make: (p, r) => { const a = p.m[0], b = p.m[1];
         const c = `${r.pick(MUS[a.kind].loc)} dan ${r.pick(MUS[b.kind].loc)}`;
@@ -5575,7 +5857,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-sendi', codes: ['IPA-09'], ind: 'Mengidentifikasi jenis sendi berdasarkan gambar',
     params: (r) => { const kinds = r.shuffle(Object.keys(JOI)); return { m: kinds.map((k, i) => ({ kind: k, tag: ['K', 'L', 'M', 'N'][i] })) }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar jenis-jenis sendi berikut!', visuals: svgV(IPF.joints(p.m)) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar jenis-jenis sendi berikut!', visuals: svgV(IPF.R.joints(p.m)) }),
     qs: [
       { id: 'letak', code: 'IPA-09', level: 'Penerapan', type: 'pg', ind: 'Menentukan letak sendi berdasarkan gambar', make: (p, r) => { const x = r.pick(p.m);
         return pg(r, { text: `Sendi seperti gambar ${x.tag} terdapat pada … .`, correct: r.pick(JOI[x.kind].loc), wrong: p.m.filter((y) => y !== x).map((y) => r.pick(JOI[y.kind].loc)), textUniq: true, explain: `Gambar ${x.tag} adalah ${JOI[x.kind].n} yang memungkinkan ${JOI[x.kind].g}. Sendi ini terdapat pada **${join(JOI[x.kind].loc)}**.` }); } },
@@ -5627,7 +5909,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-rantai-x', codes: ['IPA-10'], ind: 'Melengkapi komponen rantai makanan',
     params: (r) => { const c = r.pick(CHAINS); const x = r.int(1, c.length - 2); return { c, x }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan bagan rantai makanan berikut!', visuals: svgV(IPF.chain(p.c.map((n) => ({ icon: ORGS[n].icon, draw: ORGS[n].draw, cap: n })), { missing: p.x })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan bagan rantai makanan berikut!', visuals: svgV(IPF.R.chain(p.c.map((n) => ({ icon: ORGS[n].icon, draw: ORGS[n].draw, cap: n })), { missing: p.x })) }),
     qs: [
       { id: 'isi', code: 'IPA-10', level: 'Penerapan', type: 'pgk', ind: 'Menentukan makhluk hidup yang dapat menempati posisi tertentu dalam rantai makanan', make: (p, r) => {
         const prey = p.c[p.x - 1], pred = p.c[p.x + 1];
@@ -5677,7 +5959,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-jaring', codes: ['IPA-10'], share: true, ind: 'Menganalisis jaring-jaring makanan',
     params: (r) => ({ s: r.int(1, 1e6) }),
-    stimulus: () => ({ title: '', kind: 'Gambar', text: 'Perhatikan jaring-jaring makanan berikut! (Arah panah menunjukkan “dimakan oleh”.)', visuals: svgV(IPF.web(WEB.nodes.map(([n, lv, x, y, top]) => ({ id: n, icon: ORGS[n].icon, draw: ORGS[n].draw, cap: n, lv, x, y, top })), WEB.edges, { w: WEB.w, h: WEB.h })) }),
+    stimulus: () => ({ title: '', kind: 'Gambar', text: 'Perhatikan jaring-jaring makanan berikut! (Arah panah menunjukkan “dimakan oleh”.)', visuals: svgV(IPF.R.web(WEB.nodes.map(([n, lv, x, y, top]) => ({ id: n, icon: ORGS[n].icon, draw: ORGS[n].draw, cap: n, lv, x, y, top })), WEB.edges, { w: WEB.w, h: WEB.h })) }),
     qs: [
       { id: 'populasi', code: 'IPA-10', level: 'Penalaran', type: 'pg', ind: 'Memprediksi perubahan populasi dalam jaring-jaring makanan', make: (p, r) => pg(r, {
         text: 'Jika ular diburu manusia secara besar-besaran, perubahan yang paling mungkin terjadi adalah … .', correct: 'populasi tikus meningkat sehingga padi banyak yang rusak', wrong: ['populasi tikus menurun karena kekurangan makanan', 'populasi padi meningkat karena tikus berkurang', 'populasi elang meningkat karena makanannya bertambah'],
@@ -5708,7 +5990,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-simbiosis', codes: ['IPA-11'], ind: 'Menentukan jenis simbiosis berdasarkan gambar',
     params: (r) => { const t0 = r.pick(['mutualisme', 'komensalisme', 'parasitisme']); const a = r.sample(SIM.filter((x) => x.t === t0), 2); const b = r.sample(SIM.filter((x) => x.t !== t0), 2); return { t0, items: r.shuffle(a.concat(b)) }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa pasangan makhluk hidup berikut!', visuals: svgV(IPF.panel(p.items.map((x, i) => ({ pair: [x.a[0], x.b[0]].map((v) => (typeof v === 'string' ? { icon: v } : v)), cap: `${x.a[1]} dan ${x.b[1]}`, tag: nb(i) })), { size: 40, cw: 118 })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa pasangan makhluk hidup berikut!', visuals: svgV(IPF.R.panel(p.items.map((x, i) => ({ pair: [x.a[0], x.b[0]].map((v) => (typeof v === 'string' ? { icon: v } : v)), cap: `${x.a[1]} dan ${x.b[1]}`, tag: nb(i) })), { size: 40, cw: 118 })) }),
     qs: [
       { id: 'jenis', code: 'IPA-11', level: 'Penerapan', type: 'pg', ind: 'Menentukan pasangan makhluk hidup dengan jenis simbiosis tertentu', make: (p, r) => { const idx = p.items.map((x, i) => (x.t === p.t0 ? i : -1)).filter((i) => i >= 0);
         return pg(r, { text: `Pasangan makhluk hidup yang melakukan ${SNAME[p.t0]} ditunjukkan nomor … .`, correct: combo(idx), wrong: comboWrongs(r, idx, 4, 2), order: 'text', explain: `${idx.map((i) => `${nb(i)} ${p.items[i].d}`).join('; ')}. Jawabannya **${combo(idx)}**.` }); } },
@@ -5734,7 +6016,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-adaptasi-hewan', codes: ['IPA-12'], ind: 'Menjelaskan cara adaptasi hewan berdasarkan gambar',
     params: (r) => { const c0 = r.pick(['melindungi diri', 'memperoleh makanan']); const a = r.sample(ADA.filter((x) => x.c === c0), 2); const b = r.sample(ADA.filter((x) => x.c !== c0), 2); return { c0, items: r.shuffle(a.concat(b)) }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa hewan berikut!', visuals: svgV(IPF.panel(p.items.map((x, i) => ({ icon: x.icon, cap: x.n, tag: nb(i) })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa hewan berikut!', visuals: svgV(IPF.R.panel(p.items.map((x, i) => ({ icon: x.icon, cap: x.n, tag: nb(i) })))) }),
     qs: [
       { id: 'sama', code: 'IPA-12', level: 'Penerapan', type: 'pg', ind: 'Menentukan hewan yang memiliki kesamaan tujuan adaptasi', make: (p, r) => { const idx = p.items.map((x, i) => (x.c === p.c0 ? i : -1)).filter((i) => i >= 0);
         return pg(r, { text: `Hewan yang beradaptasi untuk ${p.c0} ditunjukkan nomor … .`, correct: combo(idx), wrong: comboWrongs(r, idx, 4, 2), order: 'text', explain: `${idx.map((i) => `${cap(p.items[i].n)} ${p.items[i].d}`).join('. ')}. Jawabannya **${combo(idx)}**.` }); } },
@@ -5758,7 +6040,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-adaptasi-tumbuhan', codes: ['IPA-12'], ind: 'Menjelaskan cara adaptasi tumbuhan',
     params: (r) => ({ items: r.sample(PLA, 4) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa tumbuhan berikut!', visuals: svgV(IPF.panel(p.items.map((x, i) => ({ icon: x.icon, draw: x.draw, cap: x.n, tag: nb(i) })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar beberapa tumbuhan berikut!', visuals: svgV(IPF.R.panel(p.items.map((x, i) => ({ icon: x.icon, draw: x.draw, cap: x.n, tag: nb(i) })))) }),
     qs: [
       { id: 'pgk', code: 'IPA-12', level: 'Penerapan', type: 'pgk', ind: 'Memasangkan tumbuhan dengan cara adaptasinya', make: (p, r) => { const ok = r.sample(p.items.map((_, i) => i), r.int(2, 3));
         const c = ok.map((i) => `${nb(i)} ${p.items[i].d}`);
@@ -5918,7 +6200,7 @@ const IPA = (() => {
   const { reg, pg, pgk, tab, nb, combo, comboWrongs, join, cap, svgV, NAMES, tfItems } = IPA;
   const GE = U.GenError;
   const L4 = ['A', 'B', 'C', 'D'];
-  const panelV = (items, o) => svgV(IPF.panel(items, o));
+  const panelV = (items, o) => svgV(IPF.R.panel(items, o));
 
   /* ======================================================================
      IPA-13 PERUBAHAN WUJUD
@@ -5936,7 +6218,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-wujud-bagan', codes: ['IPA-13'], ind: 'Menganalisis perubahan wujud zat berdasarkan bagan',
     params: (r) => { const nums = r.shuffle(['1', '2', '3', '4', '5', '6']); const m = {}; PN.forEach((k, i) => { m[k] = nums[i]; }); return { m }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan bagan perubahan wujud zat berikut!', visuals: svgV(IPF.wujud(p.m)) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan bagan perubahan wujud zat berikut!', visuals: svgV(IPF.R.wujud(p.m)) }),
     qs: [
       { id: 'nama', code: 'IPA-13', level: 'Pemahaman', type: 'pg', ind: 'Menentukan nama perubahan wujud berdasarkan bagan', make: (p, r) => {
         const k = r.pick(PN); const no = p.m[k];
@@ -6163,7 +6445,7 @@ const IPA = (() => {
       return { who: r.pick(NAMES), rows, smooth: s[0][0], rough: s[2][0] };
     },
     stimulus: (p) => ({ title: '', kind: 'Gambar', text: `${p.who} melepaskan mobil mainan dari puncak bidang miring yang sama. Lintasan di bawah bidang miring dilapisi bahan yang berbeda-beda, lalu jarak tempuh mobil diukur.`,
-      visuals: svgV(IPF.ramp(p.rows.map((x) => x[0]))).concat([{ type: 'table', caption: 'Hasil percobaan', headers: ['Permukaan lintasan', 'Jarak tempuh (cm)'], rows: p.rows.map((x) => [x[0], String(x[1])]) }]) }),
+      visuals: svgV(IPF.R.ramp(p.rows.map((x) => x[0]))).concat([{ type: 'table', caption: 'Hasil percobaan', headers: ['Permukaan lintasan', 'Jarak tempuh (cm)'], rows: p.rows.map((x) => [x[0], String(x[1])]) }]) }),
     qs: [
       { id: 'simpul', code: 'IPA-15', level: 'Penalaran', type: 'pg', ind: 'Menyimpulkan hubungan gaya gesek dengan jarak tempuh', make: (p, r) => pg(r, {
         text: 'Kesimpulan yang tepat dari percobaan tersebut adalah … .', correct: 'makin kasar permukaan, makin besar gaya gesek sehingga jarak tempuh makin pendek',
@@ -6187,7 +6469,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-bunyi-bilah', codes: ['IPA-16'], ind: 'Membandingkan tinggi rendah bunyi pada bilah alat musik',
     params: (r) => { const base = r.shuffle([118, 100, 84, 68, 54]); return { lens: base, tags: ['P', 'Q', 'R', 'S', 'T'], alat: r.pick(['saron', 'kolintang', 'gambang']) }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Gambar berikut menunjukkan bilah-bilah ${p.alat} dengan panjang yang berbeda. Setiap bilah dipukul dengan kekuatan yang sama.`, visuals: svgV(IPF.bars(p.lens, p.tags, { cap: `bilah ${p.alat} dilihat dari depan` })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: `Gambar berikut menunjukkan bilah-bilah ${p.alat} dengan panjang yang berbeda. Setiap bilah dipukul dengan kekuatan yang sama.`, visuals: svgV(IPF.R.bars(p.lens, p.tags, { cap: `bilah ${p.alat} dilihat dari depan` })) }),
     qs: [
       { id: 'tinggi', code: 'IPA-16', level: 'Penerapan', type: 'pg', ind: 'Menentukan bilah yang menghasilkan bunyi paling tinggi', make: (p, r) => {
         const hi = r.chance(0.5);
@@ -6209,7 +6491,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-bunyi-botol', codes: ['IPA-16'], ind: 'Menganalisis tinggi rendah bunyi pada percobaan botol berisi air',
     params: (r) => ({ lv: r.shuffle([0.2, 0.42, 0.62, 0.84]), aksi: r.pick(['dipukul', 'ditiup']), who: r.pick(NAMES) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: `${p.who} mengisi empat botol yang sama dengan air yang berbeda banyaknya. Setiap botol kemudian ${p.aksi === 'dipukul' ? 'dipukul dengan sendok pada bagian yang sama' : 'ditiup pada bagian mulut botol'}.`, visuals: svgV(IPF.bottles(p.lv, ['1', '2', '3', '4'], { cap: p.aksi === 'dipukul' ? 'botol dipukul dengan sendok' : 'botol ditiup di bagian mulut botol' })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: `${p.who} mengisi empat botol yang sama dengan air yang berbeda banyaknya. Setiap botol kemudian ${p.aksi === 'dipukul' ? 'dipukul dengan sendok pada bagian yang sama' : 'ditiup pada bagian mulut botol'}.`, visuals: svgV(IPF.R.bottles(p.lv, ['1', '2', '3', '4'], { cap: p.aksi === 'dipukul' ? 'botol dipukul dengan sendok' : 'botol ditiup di bagian mulut botol' })) }),
     qs: [
       { id: 'tinggi', code: 'IPA-16', level: 'Penalaran', type: 'pg', ind: 'Menentukan botol yang menghasilkan bunyi paling tinggi', make: (p, r) => {
         const tap = p.aksi === 'dipukul';
@@ -6334,7 +6616,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-cahaya-bias', codes: ['IPA-17'], ind: 'Menentukan arah berkas sinar bias',
     params: (r) => ({ tags: r.shuffle(['1', '2', '3', '4']) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Seberkas cahaya merambat dari udara menuju air seperti gambar berikut.', visuals: svgV(IPF.rays('bias', BIAS.map((b, i) => ({ end: b.end, tag: p.tags[i] })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Seberkas cahaya merambat dari udara menuju air seperti gambar berikut.', visuals: svgV(IPF.R.rays('bias', BIAS.map((b, i) => ({ end: b.end, tag: p.tags[i] })))) }),
     qs: [
       { id: 'arah', code: 'IPA-17', level: 'Penalaran', type: 'pg', ind: 'Menentukan arah sinar bias yang tepat', make: (p, r) => { const no = p.tags[0];
         return pg(r, { text: 'Arah berkas cahaya setelah masuk ke dalam air yang tepat ditunjukkan nomor … .', correct: no, wrong: p.tags.slice(1), order: 'text',
@@ -6344,7 +6626,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-cahaya-pantul', codes: ['IPA-17'], ind: 'Menentukan arah berkas sinar pantul pada cermin datar',
     params: (r) => ({ tags: r.shuffle(['1', '2', '3', '4']) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Seberkas cahaya mengenai cermin datar seperti gambar berikut.', visuals: svgV(IPF.rays('pantul', PANTUL.map((b, i) => ({ end: b.end, tag: p.tags[i] })))) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Seberkas cahaya mengenai cermin datar seperti gambar berikut.', visuals: svgV(IPF.R.rays('pantul', PANTUL.map((b, i) => ({ end: b.end, tag: p.tags[i] })))) }),
     qs: [
       { id: 'arah', code: 'IPA-17', level: 'Penerapan', type: 'pg', ind: 'Menentukan arah sinar pantul yang tepat', make: (p, r) => { const no = p.tags[0];
         return pg(r, { text: 'Arah berkas sinar pantul yang tepat ditunjukkan nomor … .', correct: no, wrong: p.tags.slice(1), order: 'text',
@@ -6383,7 +6665,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-tatasurya', codes: ['IPA-18'], ind: 'Mengidentifikasi planet berdasarkan gambar dan ciri-cirinya',
     params: (r) => { const idx = r.sample([0, 1, 2, 3, 4, 5, 6, 7], 4).sort((a, b) => a - b); const labs = ['P', 'Q', 'R', 'S']; const tags = {}; idx.forEach((k, i) => { tags[k] = labs[i]; }); return { idx, tags }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar susunan tata surya berikut!', visuals: svgV(IPF.solar(p.tags)) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar susunan tata surya berikut!', visuals: svgV(IPF.R.solar(p.tags)) }),
     qs: [
       { id: 'nama', code: 'IPA-18', level: 'Pemahaman', type: 'pg', ind: 'Menentukan nama planet pada orbit tertentu berdasarkan gambar', make: (p, r) => { const k = r.pick(p.idx), lab = p.tags[k];
         const near = [k - 1, k + 1, k - 2, k + 2].filter((x) => x >= 0 && x < 8).map((x) => PL[x]);
@@ -6426,7 +6708,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-rotasi', codes: ['IPA-19'], ind: 'Menjelaskan akibat rotasi bumi berdasarkan gambar',
     params: (r) => ({ swap: r.chance(0.5) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Gambar berikut menunjukkan bumi yang sedang berotasi dan menerima cahaya Matahari.', visuals: svgV(IPF.rotation({ marks: p.swap ? { siang: 'Q', malam: 'P' } : { siang: 'P', malam: 'Q' } })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Gambar berikut menunjukkan bumi yang sedang berotasi dan menerima cahaya Matahari.', visuals: svgV(IPF.R.rotation({ marks: p.swap ? { siang: 'Q', malam: 'P' } : { siang: 'P', malam: 'Q' } })) }),
     qs: [
       { id: 'kondisi', code: 'IPA-19', level: 'Pemahaman', type: 'pg', ind: 'Menentukan keadaan wilayah bumi berdasarkan gambar rotasi', make: (p, r) => { const lab = r.pick(['P', 'Q']); const siang = (lab === 'P') !== p.swap;
         return pg(r, { text: `Wilayah yang ditunjuk huruf ${lab} sedang mengalami … .`, correct: siang ? 'siang hari karena menghadap Matahari' : 'malam hari karena membelakangi Matahari',
@@ -6496,7 +6778,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-gerhana-matahari', codes: ['IPA-20'], ind: 'Menganalisis gerhana matahari berdasarkan gambar',
     params: (r) => { const s = r.chance(0.5); return { umbra: s ? 'P' : 'Q', penumbra: s ? 'Q' : 'P' }; },
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar posisi matahari, bulan, dan bumi berikut!', visuals: svgV(IPF.eclipse('matahari', { names: { matahari: 'matahari', bulan: 'bulan', bumi: 'bumi' }, region: { umbra: p.umbra, penumbra: p.penumbra } })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Perhatikan gambar posisi matahari, bulan, dan bumi berikut!', visuals: svgV(IPF.R.eclipse('matahari', { names: { matahari: 'matahari', bulan: 'bulan', bumi: 'bumi' }, region: { umbra: p.umbra, penumbra: p.penumbra } })) }),
     qs: [
       { id: 'jenis', code: 'IPA-20', level: 'Pemahaman', type: 'pg', ind: 'Menentukan jenis gerhana berdasarkan posisi benda langit', make: (p, r) => pg(r, { text: 'Peristiwa yang ditunjukkan gambar tersebut adalah … .', correct: 'gerhana matahari', wrong: ['gerhana bulan', 'bulan purnama', 'pasang surut air laut'],
         explain: 'Bulan berada di antara matahari dan bumi sehingga bayangan bulan jatuh ke permukaan bumi. Peristiwa ini adalah **gerhana matahari**.' }) },
@@ -6509,7 +6791,7 @@ const IPA = (() => {
   reg({
     id: 'ipa-gerhana-bulan', codes: ['IPA-20'], ind: 'Menganalisis posisi benda langit saat gerhana bulan',
     params: (r) => ({ labs: r.shuffle(['K', 'L', 'M']) }),
-    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Gambar berikut menunjukkan posisi tiga benda langit ketika terjadi gerhana.', visuals: svgV(IPF.eclipse('bulan', { names: { matahari: p.labs[0], bumi: p.labs[1], bulan: p.labs[2] } })) }),
+    stimulus: (p) => ({ title: '', kind: 'Gambar', text: 'Gambar berikut menunjukkan posisi tiga benda langit ketika terjadi gerhana.', visuals: svgV(IPF.R.eclipse('bulan', { names: { matahari: p.labs[0], bumi: p.labs[1], bulan: p.labs[2] } })) }),
     qs: [
       { id: 'posisi', code: 'IPA-20', level: 'Penerapan', type: 'pg', ind: 'Menentukan benda langit berdasarkan posisinya saat gerhana', make: (p, r) => {
         const right = `${p.labs[0]} = matahari, ${p.labs[1]} = bumi, ${p.labs[2]} = bulan`;
@@ -7932,6 +8214,30 @@ Fisika
   }
 
   // ---------------- Buat ulang & variasi ----------------
+  // Perbarui gambar IPAS pada naskah lama ke gaya gambar terbaru. Hanya dilakukan bila
+  // setiap soal kelompok itu terbukti dibuat dari parameter yang sama (dihitung ulang dan
+  // hasilnya identik) dan tidak pernah diedit, sehingga huruf/label pada gambar tetap cocok.
+  function refreshFigures(pkg) {
+    let n = 0;
+    (pkg.groups || []).forEach((g) => {
+      const tpl = g.gen && g.gen.tpl && TPL[g.gen.tpl];
+      if (!tpl || tpl.subj !== 'ipas') return;
+      const vs = (g.stimulus && g.stimulus.visuals) || [];
+      if (!vs.some((v) => v.type === 'svg' && !v.fig)) return;
+      if (!g.questions.length || g.questions.some((q) => q.edited || !q.gen || q.gen.tpl !== g.gen.tpl)) return;
+      try {
+        const p = tpl.params(U.rng(g.gen.seed));
+        const sig = (q) => JSON.stringify([q.key, (q.options || []).map(optTxt), (q.statements || []).map((x) => [x.text, x.key])]);
+        const same = g.questions.every((q) => { const m = tpl.qs.find((x) => x.id === q.gen.maker); return m && sig(m.make(p, U.rng(q.gen.qseed))) === sig(q); });
+        if (!same) return;
+        const st = tpl.stimulus(p), nv = st.visuals || [];
+        if ((st.text || '') !== (g.stimulus.text || '') || nv.length !== vs.length || !nv.every((v, i) => v.type === vs[i].type)) return;
+        g.stimulus.visuals = nv.map((v, i) => Object.assign({}, v, vs[i].caption ? { caption: vs[i].caption } : {}));
+        n++;
+      } catch (e) { /* biarkan gambar lama */ }
+    });
+    return n;
+  }
   function regenQuestion(pkg, gi, qi, seed) {
     const g = pkg.groups[gi], q = g.questions[qi];
     seed = seed || U.newSeed();
@@ -8133,7 +8439,7 @@ Fisika
     return { n: F.length, groups: pkg.groups.length, types: by((q) => q.type), levels: by((q) => q.level || '-'), forms: by((q) => q.form || (q.variant === 'diagram' ? 'Interpretasi diagram' : q.variant === 'visual' ? 'Interpretasi visual' : '')), materi: by((q) => q.materi || '-'), sub: by((q) => q.submateri || '-') };
   }
 
-  return { TPL, KISI_MTK, KISI_BI, KISI_IPA, analyze, autoCount, planMath, planBI, planIPA, ipaTargets, buildMathGroup, buildBIGroup, validate, regenQuestion, regenGroup, runLocal, buildSync, STEPS, scoreQuestion, scoreAttempt, flat, stats, CHECKS };
+  return { TPL, KISI_MTK, KISI_BI, KISI_IPA, analyze, autoCount, planMath, planBI, planIPA, ipaTargets, buildMathGroup, buildBIGroup, validate, regenQuestion, regenGroup, refreshFigures, runLocal, buildSync, STEPS, scoreQuestion, scoreAttempt, flat, stats, CHECKS };
 })();
 
 /* ===== 70_store.js ===== */
@@ -8891,7 +9197,7 @@ const slug = (s) => U.plain(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace
 
 // ---------------- Sanitasi SVG (untuk konten dari AI / impor / tautan) ----------------
 const SAFE_EL = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path', 'text', 'tspan', 'pattern', 'clipPath', 'marker', 'linearGradient', 'radialGradient', 'stop', 'use']);
-const SAFE_AT = new Set(['xmlns', 'viewbox', 'width', 'height', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'd', 'points', 'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'transform', 'font-size', 'font-weight', 'font-family', 'font-style', 'text-anchor', 'dominant-baseline', 'id', 'class', 'clip-path', 'marker-end', 'marker-start', 'refx', 'refy', 'markerwidth', 'markerheight', 'orient', 'preserveaspectratio', 'patternunits', 'patterntransform', 'offset', 'stop-color', 'letter-spacing', 'dx', 'dy', 'role', 'aria-label', 'href', 'xlink:href', 'style', 'gradientunits', 'fill-rule', 'clip-rule', 'markerunits']);
+const SAFE_AT = new Set(['xmlns', 'viewbox', 'width', 'height', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'd', 'points', 'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'transform', 'font-size', 'font-weight', 'font-family', 'font-style', 'text-anchor', 'dominant-baseline', 'id', 'class', 'clip-path', 'marker-end', 'marker-start', 'refx', 'refy', 'markerwidth', 'markerheight', 'orient', 'preserveaspectratio', 'patternunits', 'patterntransform', 'offset', 'stop-color', 'stop-opacity', 'fx', 'fy', 'gradienttransform', 'spreadmethod', 'letter-spacing', 'dx', 'dy', 'role', 'aria-label', 'href', 'xlink:href', 'style', 'gradientunits', 'fill-rule', 'clip-rule', 'markerunits']);
 function sanitizeSvg(str) {
   if (!str || typeof DOMParser === 'undefined') return '';
   let doc;
@@ -8945,10 +9251,22 @@ function chartSVG(v) {
   } catch (e) { return ''; }
   return '';
 }
+// Gambar yang sama bisa tampil dua kali dalam satu halaman (layar + area cetak).
+// Gradasi/pola merujuk id; bila id kembar dan salinan pertama tersembunyi, warnanya
+// hilang saat dicetak. Karena itu setiap kali disisipkan, id diberi akhiran unik.
+let _svgSeq = 0;
+function uniqSvgIds(svg) {
+  if (!svg || svg.indexOf(' id="') < 0) return svg;
+  const sfx = '_' + (++_svgSeq).toString(36);
+  const ids = new Set(); svg.replace(/\sid="([^"]+)"/g, (_, id) => { ids.add(id); return ''; });
+  let out = svg;
+  ids.forEach((id) => { out = out.split(`id="${id}"`).join(`id="${id}${sfx}"`).split(`url(#${id})`).join(`url(#${id}${sfx})`).split(`href="#${id}"`).join(`href="#${id}${sfx}"`); });
+  return out;
+}
 function visHTML(v) {
   if (!v) return '';
   if (v.type === 'table') return tableHTML(v);
-  const svg = v.type === 'svg' ? v.svg : chartSVG(v);
+  const svg = uniqSvgIds(v.type === 'svg' ? v.svg : chartSVG(v));
   if (!svg) return '';
   return `<figure class="fig">${svg}${v.caption ? `<figcaption>${mdi(v.caption)}</figcaption>` : ''}</figure>`;
 }
@@ -8968,7 +9286,7 @@ function miniTable(t) {
   return `<table class="otable">${t.headers ? `<tr>${t.headers.map((h) => `<th>${mdi(h)}</th>`).join('')}</tr>` : ''}${(t.rows || []).map((r) => `<tr>${r.map((c, i) => (i === 0 && t.headers ? `<th>${mdi(c)}</th>` : `<td>${mdi(c)}</td>`)).join('')}</tr>`).join('')}</table>`;
 }
 function optContent(o) {
-  if (o.svg) return `<span class="opt-svg">${o.svg}</span>`;
+  if (o.svg) return `<span class="opt-svg">${uniqSvgIds(o.svg)}</span>`;
   if (o.table) return miniTable(o.table);
   return mdi(o.text != null ? o.text : '');
 }
@@ -9616,11 +9934,22 @@ function slimPkg(p) {
   if (c.analysis) c.analysis = { codes: c.analysis.codes };
   return c;
 }
+// Tautan siswa: gambar IPAS yang masih sama dengan resepnya tidak ikut dikirim,
+// melainkan digambar ulang di perangkat siswa (label dan bagian yang ditunjuk tetap sama).
+function linkPkg(p) {
+  const c = slimPkg(p);
+  (c.groups || []).forEach((g) => ((g.stimulus && g.stimulus.visuals) || []).forEach((v) => { if (v && v.type === 'svg' && IPF.sameAsRecipe(v)) delete v.svg; }));
+  return c;
+}
+function restoreFigs(p) {
+  (p.groups || []).forEach((g) => ((g.stimulus && g.stimulus.visuals) || []).forEach((v) => { if (v && v.type === 'svg' && !v.svg && v.fig) v.svg = IPF.render(v.fig); }));
+  return p;
+}
 const b64url = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
 const unb64url = (s) => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const b = atob(s); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
 async function encodePkg(p) {
   if (p.builtin && !p.modified) return 'b' + p.builtin;
-  const json = JSON.stringify(slimPkg(p));
+  const json = JSON.stringify(linkPkg(p));
   if (window.CompressionStream) {
     const cs = new Blob([json]).stream().pipeThrough(new CompressionStream('deflate-raw'));
     return 'z' + b64url(new Uint8Array(await new Response(cs).arrayBuffer()));
@@ -9637,7 +9966,7 @@ async function decodePkg(s) {
     json = await new Response(ds).text();
   } else if (k === 'j') json = new TextDecoder().decode(unb64url(body));
   else throw new Error('Format tautan tidak dikenali.');
-  return cleanPackage(JSON.parse(json));
+  return cleanPackage(restoreFigs(JSON.parse(json)));
 }
 function studentFileHTML(p) {
   const boot = `<script>window.__TKA_BOOT__=${JSON.stringify({ mode: 'siswa', pkg: slimPkg(p) }).replace(/</g, '\\u003c')};<\/script>`;
@@ -9823,7 +10152,7 @@ INP['ed:svgcode'] = (el) => {
   el.dataset.t = setTimeout(() => {
     const clean = sanitizeSvg(el.value);
     if (!clean) { toast('Kode SVG tidak valid.', 'bad'); return; }
-    const v = getPath(ED.pkg, el.dataset.p); v.svg = clean; markEdited(el.dataset.p); edSave(); el.closest('.vis-ed').querySelector('.prev').innerHTML = visHTML(v);
+    const v = getPath(ED.pkg, el.dataset.p); v.svg = clean; delete v.fig; markEdited(el.dataset.p); edSave(); el.closest('.vis-ed').querySelector('.prev').innerHTML = visHTML(v);
   }, 700);
 };
 ACT['ed:toggle'] = (el, e) => {
@@ -10367,6 +10696,21 @@ const BOOT = (() => {
     const s2 = STORE.settings(); s2.demoSeeded = true; s2.demoKeys = Array.from(done); STORE.saveSettings(s2);
     return n;
   }
+  // Revisi gambar IPAS: naskah IPAS yang tersimpan diperbarui sekali ke gambar terbaru
+  // (hanya kelompok soal yang belum diedit dan terbukti cocok saat dihitung ulang).
+  const FIG_REV = 2;
+  function refreshSavedFigures() {
+    const s = STORE.settings();
+    if ((s.figRev || 1) >= FIG_REV) return 0;
+    let n = 0;
+    STORE.listPkgs().forEach((m) => {
+      const p = STORE.getPkg(m.id);
+      if (!p || p.subject !== 'ipas') return;
+      try { const k = ENGINE.refreshFigures(p); if (k) { STORE.savePkg(p, false); n += k; } } catch (e) { /* lewati */ }
+    });
+    const s2 = STORE.settings(); s2.figRev = FIG_REV; STORE.saveSettings(s2);
+    return n;
+  }
   async function start() {
     const boot = window.__TKA_BOOT__;
     if (boot && boot.mode === 'siswa' && boot.pkg) {
@@ -10375,6 +10719,7 @@ const BOOT = (() => {
       if (!/^#\/(ujian|hasil)\//.test(location.hash)) location.replace('#/ujian/' + APP.student.id);
     } else if (!/^#\/s\//.test(location.hash)) {
       try { await seedDemos(false); } catch (e) { console.error('Gagal membuat paket contoh', e); }
+      try { refreshSavedFigures(); } catch (e) { console.error('Gagal memperbarui gambar', e); }
     }
     window.addEventListener('hashchange', route);
     route();

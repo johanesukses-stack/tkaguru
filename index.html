@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2747c9">
-<meta name="description" content="TKA GURU — aplikasi untuk menyusun naskah latihan Tes Kemampuan Akademik (TKA) Matematika dan Bahasa Indonesia dari kisi-kisi, lengkap dengan mode ujian, penilaian, dan pembahasan.">
+<meta name="description" content="TKA GURU — aplikasi AI untuk menyusun naskah TKA Matematika, Bahasa Indonesia, dan TKAD IPAS dari kisi-kisi, lengkap dengan visual, mode ujian, penilaian, dan pembahasan.">
 <title>TKA GURU — Buat Naskah TKA Lebih Mudah dengan AI</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='8' fill='%232747C9'/%3E%3Crect x='8' y='6.5' width='16' height='19' rx='2.5' fill='%23fff'/%3E%3Ccircle cx='12.3' cy='12' r='2' fill='%232747C9'/%3E%3Ccircle cx='17.3' cy='18' r='2' fill='%232747C9'/%3E%3C/svg%3E">
 <style>
@@ -309,6 +309,8 @@ details.adv[open] { padding-bottom: 6px; }
 .stim-text h4 { font-family: var(--font); margin: .4em 0; font-size: 11pt; }
 .fig { margin: 8px auto; text-align: center; break-inside: avoid; }
 .fig svg { height: auto; max-width: 100%; }
+.fig img { display:block; width:auto; max-width:100%; max-height:340px; height:auto; margin:8px auto; object-fit:contain; border:1px solid #dbe2ee; border-radius:8px; background:#fff; }
+.fig img { display: block; max-width: 100%; max-height: 320px; width: auto; height: auto; margin: 0 auto; object-fit: contain; border-radius: 8px; }
 .fig figcaption { font-family: var(--font); font-size: 10pt; color: #4b5568; margin-top: 2px; }
 .figs { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 6px 22px; }
 .dtable { border-collapse: collapse; margin: 6px auto; font-family: var(--font); font-size: 10.5pt; min-width: 55%; }
@@ -9572,7 +9574,7 @@ Fisika
   }
 
   // ---------------- Pipeline lokal (7 langkah) ----------------
-  const STEPS = ['Menganalisis kisi-kisi', 'Menentukan kompetensi', 'Membuat stimulus', 'Menyusun pertanyaan', 'Membuat kunci jawaban', 'Memvalidasi soal', 'Menyelesaikan naskah'];
+  const STEPS = ['Menganalisis kisi-kisi', 'Memetakan indikator dan komposisi', 'Menyusun stimulus, soal, dan kunci', 'Menormalisasi soal dan jawaban', 'Menyiapkan visual SVG/tabel dan arahan gambar', 'Memvalidasi soal', 'Menyelesaikan naskah'];
   async function runLocal(a, opts = {}, onStep = async () => {}) {
     const seed = opts.seed || U.newSeed();
     const r = U.rng(seed);
@@ -9812,7 +9814,7 @@ const AI = (() => {
   class AIError extends Error {}
   const LET = ['A', 'B', 'C', 'D', 'E', 'F'];
   const cfg = () => STORE.settings().ai || {};
-  const ready = () => { const c = cfg(); return !!(c.url && c.verifiedAt); };
+  const ready = () => { const c = cfg(); return !!(c.url && c.verifiedAt && c.freeMode === true && (+c.proxyV || 0) >= 7); };
 
   async function post(body, signal, timeoutMs = 170000, override) {
     const c = override || cfg();
@@ -9852,12 +9854,12 @@ const AI = (() => {
     const st = +((data && data.status) || 0);
     if (!st && /timeout|timed out|exceeded maximum execution/i.test(msg)) {
       er.slow = true;
-      er.message = 'Permintaan ke Gemini melebihi batas waktu Apps Script (sekitar 60 detik per permintaan), biasanya karena model sedang lambat. Coba lagi, atau ganti GEMINI_MODEL ke model yang lebih cepat, misalnya gemini-flash-lite-latest.';
+      er.message = 'Permintaan ke Gemini melebihi batas waktu Apps Script (sekitar 60 detik per permintaan), biasanya karena model sedang lambat atau sedang padat. Proxy mode gratis sudah mencoba model cadangan yang diizinkan; coba lanjutkan kembali setelah beberapa saat.';
       return er;
     }
     if (st !== 429 && !RATE_RE.test(msg) && ((st >= 500 && st < 600) || BUSY_RE.test(msg))) {
       er.busy = true;
-      er.message = `Server Gemini sedang sibuk${st ? ` (HTTP ${st})` : ''}. Ini gangguan sementara di pihak Google, bukan masalah API key atau kuota, dan biasanya pulih dalam beberapa menit. Coba lagi nanti, atau gunakan generator lokal. Pesan Google: “${msg.slice(0, 160)}”`;
+      er.message = `Server Gemini sedang sibuk${st ? ` (HTTP ${st})` : ''}. Ini gangguan sementara di pihak Google. Coba lanjutkan kembali beberapa saat lagi. Pesan Google: “${msg.slice(0, 160)}”`;
       return er;
     }
     if (!(st === 429 || RATE_RE.test(msg))) return er;
@@ -9865,13 +9867,13 @@ const AI = (() => {
     if (/limit:\s*0\b/i.test(msg)) {
       const mdl = (data && data.model) || ((/model:\s*([\w.\-]+)/i.exec(msg) || [])[1]) || 'yang dipakai';
       er.daily = true;
-      er.message = `Model ${mdl} tidak tersedia untuk API key ini pada paket gratis (kuotanya 0, bukan gangguan sementara). Ganti GEMINI_MODEL di Script Properties Apps Script ke model lain yang tersedia, misalnya gemini-flash-lite-latest, lalu klik Lanjutkan dengan AI.`;
+      er.message = `Kuota gratis model ${mdl} habis atau tidak tersedia untuk API key ini. Proxy hanya mencoba model teks gratis yang diizinkan. Tunggu kuota Google AI Studio pulih atau periksa batas akun; mode ini tidak memanggil API gambar berbayar.`;
       return er;
     }
     const hint = (data && data.retryDelay) || ((/retry in\s+([\dhms.\s]+?)(?:\.\s|\.?$|\n)/i.exec(msg) || [])[1]) || '';
     er.wait = secondsOf(hint);
     er.daily = er.wait > 120 || (!er.wait && DAY_RE.test(msg));
-    if (er.daily) er.message = 'Kuota harian Gemini untuk API key ini sudah habis. Kuota direset setiap tengah malam waktu Pasifik (sekitar pukul 14.00–15.00 WIB). Sementara itu, gunakan generator lokal, atau aktifkan penagihan di Google AI Studio untuk batas yang lebih besar.';
+    if (er.daily) er.message = 'Kuota gratis Gemini untuk model yang dicoba sudah habis. Proxy sudah mencoba model cadangan gratis yang diizinkan. Tunggu sampai kuota pulih sesuai jadwal Google AI Studio, lalu lanjutkan kembali.';
     return er;
   }
   const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -9914,7 +9916,7 @@ const AI = (() => {
     for (let k = 0; k <= retries;) {
       try {
         reqStat.sent++;
-        const d = await post({ prompt, system: SYSTEM, json: true, temperature }, signal);
+        const d = await post({ prompt, system: SYSTEM, json: true, temperature, maxOutputTokens: 8192 }, signal);
         if (d.model) { lastModel = d.model; reqStat.models[d.model] = (reqStat.models[d.model] || 0) + 1; }
         const res = parseJSON(d.text);
         if (h) cachePut(h, res);
@@ -9936,7 +9938,9 @@ const AI = (() => {
     throw lastErr;
   }
   async function test(url, token) {
-    const d = await post({ ping: true }, null, 30000, { url, token });
+    // Proxy versi terbaru melakukan pemeriksaan ke model teks sungguhan, bukan hanya membalas "pong".
+    const d = await post({ ping: true, verifyText: true }, null, 60000, { url, token });
+    if (+d.version < 7 || d.freeMode !== true) throw new AIError('Proxy bukan versi mode gratis v7. Salin kode proxy baru dari Pengaturan, ganti seluruh Code.gs, lalu deploy versi baru.');
     return d;
   }
   async function pool(items, n, fn, signal) {
@@ -9948,26 +9952,33 @@ const AI = (() => {
     return out;
   }
 
-  const SYSTEM = `Anda adalah penyusun asesmen profesional Tes Kemampuan Akademik (TKA) Indonesia untuk Matematika dan Bahasa Indonesia.
-Prinsip kerja:
-- Patuhi kisi-kisi guru dan wakili semua indikator secara proporsional. Jika jenjang tidak disebutkan, gunakan Kelas 6 SD/MI.
-- Buat stimulus baru dan orisinal (jangan menyalin teks berhak cipta). Gunakan bahasa Indonesia baku yang sesuai jenjang.
-- Satu stimulus dipakai untuk tepat tiga soal yang menguji kemampuan berbeda (pemahaman, penerapan, penalaran).
-- Stimulus harus benar-benar diperlukan untuk menjawab soal.
-- Variasikan bentuk soal sesuai indikator: pg (pilihan ganda 4 opsi, 1 kunci), pgk (pilihan ganda kompleks 4–5 opsi, 2–3 kunci), bs (Benar/Salah), ss (Sesuai/Tidak Sesuai), mtm (Mendukung/Tidak Mendukung), kat (klasifikasi dengan label sendiri). Jangan membuat semua soal pilihan ganda.
-- Matematika: angka masuk akal, data konsisten dan cukup, setiap perhitungan diverifikasi, pembahasan berisi langkah penyelesaian, pengecoh berasal dari kesalahan yang umum. Jangan hanya mengganti angka dari soal yang sama.
+  const SYSTEM = `Anda adalah tim penyusun asesmen profesional TKA dan TKAD untuk siswa SD/MI kelas 6 di Indonesia. Anda menguasai Matematika, Bahasa Indonesia, dan IPAS/Literasi Sains.
+Prinsip kerja wajib:
+- Patuhi kisi-kisi guru dan wakili seluruh indikator secara proporsional. Jika jenjang tidak disebutkan, gunakan Kelas 6 SD/MI.
+- Buat stimulus dan soal baru, orisinal, kontekstual dengan kehidupan siswa Indonesia; jangan menyalin teks berhak cipta.
+- Satu stimulus dipakai untuk tepat tiga soal yang menguji kemampuan berbeda: pemahaman, penerapan, dan penalaran.
+- Stimulus harus benar-benar diperlukan untuk menjawab soal; data, satuan, gambar, tabel, dan keterangan harus konsisten.
+- Variasikan bentuk soal: pg (4 opsi, 1 kunci), pgk/MCMA (4–5 opsi, 2–3 kunci), bs (Benar/Salah), ss (Sesuai/Tidak Sesuai), mtm (Mendukung/Tidak Mendukung), dan kat (klasifikasi dengan label sendiri). Ikuti bentuk yang diminta pada rancangan.
+- Matematika: pastikan angka, satuan, skala, ukuran, sudut, luas, keliling, volume, dan data konsisten. Hitung ulang setiap jawaban; pengecoh harus mewakili kesalahan umum. Diagram geometri harus proporsional dan ukuran dibuat dengan SVG terukur, bukan gambar generatif.
+- IPAS: gunakan konsep sains SD/MI yang benar, hubungan sebab-akibat masuk akal, istilah ilmiah tepat, dan konteks ekosistem, tubuh manusia, materi, energi, bumi, atau teknologi. Gunakan diagram SVG skematis, bagan daur hidup, rantai makanan, rangkaian listrik, tabel eksperimen, atau grafik data yang relevan.
 - Bahasa Indonesia: setiap jawaban harus dapat dibuktikan dari stimulus; pembahasan menyebut bukti dari teks.
-- Hindari soal ambigu dan jawaban ganda yang tidak disengaja.
+- Mode ini HANYA memakai AI teks dan visual SVG/tabel/grafik. Jangan meminta, membuat, atau mengeluarkan foto raster, image_prompt, URL gambar, base64, atau panggilan ke model pembuat gambar.
+- Untuk Matematika dan IPAS, gunakan SVG/tabel/grafik bila visual benar-benar membantu. Targetkan visual yang relevan pada sekurang-kurangnya 5 dari 10 kelompok IPAS dan 4 dari 10 kelompok Matematika. Jangan membuat gambar dekoratif atau memaksakan visual yang tidak dibutuhkan.
+- Arahan gambar eksternal boleh ditulis pada field stimulus.arahan_gambar_lanjutan sebagai deskripsi untuk guru saat kelak mengedit naskah di aplikasi lain. Arahan itu tidak boleh memuat informasi baru yang menjadi syarat menjawab soal dan tidak boleh menggantikan visual presisi di SVG/tabel.
+- Untuk diagram SVG, gunakan hanya elemen dasar svg, g, rect, circle, ellipse, line, polyline, polygon, path, text, tspan, defs, marker, dan title. Jangan gunakan script, foreignObject, CSS eksternal, URL gambar, atau resource luar.
+- Label, angka, skala, panah, dan data harus dibuat sebagai teks SVG atau tabel yang dapat dibaca dan akurat.
+- Hindari soal ambigu, informasi kurang, jawaban ganda yang tidak disengaja, dan pengulangan pola pertanyaan.
 - Tulis pecahan dengan format {{pembilang/penyebut}} dan pecahan campuran {{1 1/2}}. Gunakan **teks** untuk menebalkan kata yang ditanyakan.
 - Balas HANYA dengan JSON valid sesuai skema yang diminta, tanpa penjelasan lain.`;
 
-  const VISUAL_SPEC = `Format "visual" (pilih salah satu, atau null):
+  const VISUAL_SPEC = `Format "visual" (boleh satu objek atau array objek):
 {"tipe":"tabel","judul":"...","kolom":["..."],"baris":[["..."]]}
 {"tipe":"diagram_batang","judul":"...","label":["..."],"nilai":[angka],"sumbu_y":"..."}
 {"tipe":"diagram_garis","judul":"...","label":["..."],"nilai":[angka],"sumbu_y":"..."}
 {"tipe":"diagram_lingkaran","judul":"...","label":["..."],"nilai":[angka]}
 {"tipe":"piktogram","judul":"...","label":["..."],"nilai":[angka],"nilai_per_gambar":angka,"satuan":"...","ikon":"buku|orang|botol|pohon|karung|apel|bintang|ikan"}
-{"tipe":"svg","svg":"<svg viewBox=...>...</svg>"} (untuk bangun datar/ruang; tanpa skrip, ukuran ≤ 480×360, beri label ukuran)`;
+{"tipe":"svg","svg":"<svg viewBox=...>...</svg>"} (untuk geometri, sistem organ skematis, rantai makanan, daur hidup, rangkaian, alur/proses; label dan ukuran harus akurat)
+Jangan pernah mengeluarkan tipe image_prompt, foto_ai, gambar_ai, URL gambar, HTML img, atau data gambar raster. Bila gambar foto kelak dibutuhkan, tulis arahan singkat di field stimulus.arahan_gambar_lanjutan, bukan sebagai visual.`;
 
   // ---------------- Normalisasi keluaran AI ----------------
   const TYPE_MAP = { pg: 'pg', pilihan_ganda: 'pg', pilihanganda: 'pg', interpretasi_diagram: 'pg', interpretasi_visual: 'pg', interpretasi_data: 'pg', pgk: 'pgk', pilihan_ganda_kompleks: 'pgk', kompleks: 'pgk', bs: 'bs', benar_salah: 'bs', ss: 'ss', sesuai_tidak_sesuai: 'ss', mtm: 'mtm', mendukung_tidak_mendukung: 'mtm', kat: 'kat', klasifikasi: 'kat', klasifikasi_pernyataan: 'kat' };
@@ -9980,6 +9991,8 @@ Prinsip kerja:
     if (t.indexOf('garis') >= 0 || t === 'line') return { type: 'line', title: v.judul || '', labels: (v.label || v.labels || []).map(String), values: num(v.nilai || v.values), yLabel: v.sumbu_y || '' };
     if (t.indexOf('lingkaran') >= 0 || t === 'pie') return { type: 'pie', title: v.judul || '', labels: (v.label || v.labels || []).map(String), values: num(v.nilai || v.values) };
     if (t.indexOf('pikto') >= 0) return { type: 'picto', title: v.judul || '', labels: (v.label || []).map(String), values: num(v.nilai), unitValue: parseFloat(v.nilai_per_gambar) || 1, unitLabel: v.satuan || '', icon: SVG.ICONS[v.ikon] ? v.ikon : 'bintang' };
+    // Raster image prompts are intentionally not rendered or sent to any image API in free mode.
+    if (['image_prompt', 'foto_ai', 'gambar_ai', 'image'].includes(t)) return null;
     if (t === 'svg' && v.svg) { const s = sanitizeSvg(v.svg); return s ? { type: 'svg', svg: s, caption: v.keterangan || '' } : null; }
     return null;
   }
@@ -10030,9 +10043,12 @@ Prinsip kerja:
     return q;
   }
   function normStimulus(raw) {
-    const vis = [].concat(raw.visual || raw.visuals || []).map(normVisual).filter(Boolean);
+    const rawVisuals = [].concat(raw.visual || raw.visuals || []);
+    const legacyImageNotes = rawVisuals.filter((v) => v && typeof v === 'object' && ['image_prompt', 'foto_ai', 'gambar_ai'].includes(String(v.tipe || v.type || '').toLowerCase())).map((v) => String(v.prompt || v.deskripsi || v.deskripsi_gambar || '').trim()).filter(Boolean);
+    const vis = rawVisuals.map(normVisual).filter(Boolean);
     const kind = String(raw.jenis || raw.kind || 'Stimulus');
-    return { id: U.uid('s'), title: String(raw.judul || raw.title || ''), kind: U.cap(kind), text: String(raw.teks || raw.text || '').trim(), visuals: vis, poem: /puisi/i.test(kind) };
+    const imageBrief = String(raw.arahan_gambar_lanjutan || raw.image_brief || raw.imageBrief || legacyImageNotes.join(' ')).trim().slice(0, 1800);
+    return { id: U.uid('s'), title: String(raw.judul || raw.title || ''), kind: U.cap(kind), text: String(raw.teks || raw.text || '').trim(), visuals: vis, imageBrief, poem: /puisi/i.test(kind) };
   }
 
   // ---------------- Prompt ----------------
@@ -10042,12 +10058,14 @@ Kisi-kisi dari guru:
 ${text}
 """
 Tugas:
-1. Kenali mata pelajaran (Matematika dan/atau Bahasa Indonesia). Jika ada dua mata pelajaran, buat dua paket terpisah.
-2. Tentukan jenjang (bawaan: Kelas 6 SD/MI), materi, submateri, kompetensi, dan level berpikir setiap indikator.
-3. Tentukan jumlah soal per paket: ${count ? count + ' soal' : '30 soal (10 stimulus × 3 soal); boleh 15–24 soal bila kisi-kisi sangat sempit'}.
-4. Susun rancangan: setiap stimulus memuat 3 indikator/soal dengan bentuk soal bervariasi, jenis stimulus yang cocok (Matematika: masalah kontekstual, tabel, diagram batang/garis/lingkaran, piktogram, ilustrasi bangun datar/ruang, situasi pengukuran; Bahasa Indonesia: fabel, narasi, teks informasi, eksplanasi, surat, puisi, prosedur, infografis, tabel/diagram, teks opini), dan semua indikator terwakili secara proporsional.
+1. Kenali setiap mata pelajaran yang muncul: Matematika, Bahasa Indonesia, dan/atau IPAS (TKAD/Literasi Sains). Buat satu paket terpisah untuk setiap mata pelajaran yang terdeteksi. Jangan mengalihkan IPAS ke generator lokal.
+2. Tentukan jenjang (bawaan: Kelas 6 SD/MI), materi, submateri, kompetensi, indikator terukur, dan level berpikir setiap indikator.
+3. Tentukan tepat ${count ? count + ' soal' : '30 soal'} per paket (default 30 soal = 10 stimulus × 3 soal).
+4. Susun tepat ${Math.ceil((count || 30) / 3)} rancangan stimulus per paket. Setiap stimulus memuat 3 indikator/soal dengan bentuk soal bervariasi dan seluruh indikator terwakili proporsional.
+5. Pilih stimulus yang benar-benar mendukung kompetensi: Matematika (masalah kontekstual, tabel, grafik, piktogram, SVG bangun datar/ruang, ukuran, pengukuran); Bahasa Indonesia (fabel, narasi, informasi, eksplanasi, surat, puisi, prosedur, infografis, tabel/diagram, opini); IPAS/TKAD (pengamatan lingkungan, ekosistem, organisme, organ dan sistem tubuh, eksperimen, sifat zat, gaya, energi, listrik, bumi/antariksa, teknologi) dengan diagram SVG, tabel eksperimen, atau grafik yang akurat, bukan foto raster.
+6. Untuk IPAS rancang komposisi total: 50% PG, 30% MCMA (pilihan ganda dengan lebih dari satu jawaban benar), dan 20% soal kompleks berbasis pernyataan/kategori. Bentuk internal yang dipakai: pg, pgk, dan bs/kat. Untuk 30 soal: 15 pg, 9 pgk, 6 bs/kat.
 Skema JSON:
-{"paket":[{"mapel":"Matematika","jenjang":"Kelas 6 SD/MI","judul":"Latihan TKA Matematika Kelas 6 SD/MI","indikator":[{"kode":"I1","materi":"...","kompetensi":"...","level":"Pemahaman"}],"rancangan":[{"no":1,"jenis_stimulus":"...","ide":"gambaran singkat isi stimulus","kode_indikator":["I1","I2","I3"],"bentuk":["pg","pgk","bs"]}]}]}`;
+{"paket":[{"mapel":"Matematika | Bahasa Indonesia | IPAS","jenjang":"Kelas 6 SD/MI","judul":"...","indikator":[{"kode":"I1","materi":"...","kompetensi":"...","level":"Pemahaman"}],"rancangan":[{"no":1,"jenis_stimulus":"...","ide":"gambaran singkat isi stimulus","kode_indikator":["I1","I2","I3"],"bentuk":["pg","pgk","bs"]}]}]}`;
   const pSoal = (pk, r, st) => `TAHAP: MENYUSUN SOAL
 Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
 Stimulus:
@@ -10062,26 +10080,45 @@ Aturan bentuk:
 - "pembahasan" menjelaskan alasan kunci${/indonesia/i.test(pk.mapel) ? ' dengan menyebut bukti dari teks' : ' dengan langkah perhitungan'}; untuk bentuk tabel, bahas setiap pernyataan bernomor.
 Skema JSON: {"soal":[{"bentuk":"pg","kode_indikator":"I1","level":"Pemahaman","indikator_soal":"...","pertanyaan":"...","opsi":["...","...","...","..."],"kunci":"B","label":null,"pernyataan":null,"pembahasan":"..."}]}`;
   const indLines = (pk, r, pad = '') => (r.kode_indikator || []).map((k, i) => { const ind = pk.indikator.find((x) => x.kode === k) || {}; return `${pad}${i + 1}. Indikator ${k}: ${ind.kompetensi || '-'}; bentuk ${(r.bentuk || [])[i] || 'pg'}; level ${ind.level || 'Penerapan'}`; }).join('\n');
-  const RULES_STIM = (pk) => (/indonesia/i.test(pk.mapel) ? 'Teks 120–250 kata dengan paragraf jelas (pisahkan paragraf dengan baris kosong). Puisi 2–3 bait (pisahkan baris dengan \\n). Infografis atau diagram disajikan sebagai "visual" disertai teks pengantar singkat.' : 'Konteks kehidupan sehari-hari yang akrab bagi siswa Indonesia. Semua data yang diperlukan untuk menjawab tiga soal harus ada pada stimulus. Gunakan "visual" untuk tabel, diagram, piktogram, atau gambar bangun.');
+  const RULES_STIM = (pk) => (/indonesia/i.test(pk.mapel)
+    ? 'Teks 120–250 kata dengan paragraf jelas (pisahkan paragraf dengan baris kosong). Puisi 2–3 bait (pisahkan baris dengan \\n). Infografis atau diagram disajikan sebagai visual disertai teks pengantar singkat.'
+    : /ipas|sains|ilmu pengetahuan alam/i.test(pk.mapel)
+      ? 'Stimulus IPAS wajib berisi konteks pengamatan atau fenomena sains yang masuk akal untuk siswa kelas 6. Gunakan SVG skematis untuk rantai/jaring makanan, organ, daur hidup, rangkaian listrik, alur proses, struktur atau peristiwa; gunakan tabel/grafik untuk data eksperimen. Semua label dan informasi penting harus terbaca dan akurat. Untuk pengayaan foto di aplikasi lain, isi arahan_gambar_lanjutan tanpa menjadikan foto sebagai sumber data soal.'
+      : 'Konteks kehidupan sehari-hari yang akrab bagi siswa Indonesia. Semua data yang diperlukan untuk menjawab tiga soal harus ada pada stimulus. Gunakan visual tabel, diagram, piktogram, bangun datar/ruang, atau situasi pengukuran; ukuran dan angka presisi harus dituangkan dalam SVG/tabel terukur.');
   const RULES_SOAL = (pk) => `- pg: "opsi" 4 butir, "kunci" satu huruf (A–D).
 - pgk: "opsi" 4–5 butir, "kunci" daftar 2–3 huruf.
 - bs/ss/mtm/kat: "pernyataan" 3–5 butir, setiap butir punya "kunci" berupa salah satu "label". Label bawaan: bs ["Benar","Salah"], ss ["Sesuai","Tidak Sesuai"], mtm ["Mendukung","Tidak Mendukung"]; kat memakai label sendiri. Untuk mtm, tulis pendapat yang dinilai di dalam "pertanyaan".
 - Soal interpretasi diagram boleh memakai opsi berbentuk {"diagram_alur":["langkah 1","langkah 2","langkah 3","langkah 4"]}.
 - "pembahasan" menjelaskan alasan kunci${/indonesia/i.test(pk.mapel) ? ' dengan menyebut bukti dari teks' : ' dengan langkah perhitungan'}; untuk bentuk tabel, bahas setiap pernyataan bernomor.`;
   // Satu permintaan menghasilkan beberapa kelompok sekaligus (stimulus + 3 soal) agar hemat kuota.
-  const pKelompok = (pk, items) => `TAHAP: MENYUSUN STIMULUS DAN SOAL
+  const pKelompok = (pk, items) => {
+    const ipa = /ipas|sains|ilmu\s+pengetahuan\s+alam/i.test(pk.mapel);
+    const math = /matematika/i.test(pk.mapel);
+    const imageBriefNos = ipa ? [1, 3, 5, 7, 9] : math ? [2, 5, 8] : [];
+    const briefRule = items.some((r) => imageBriefNos.includes(+r.no))
+      ? `Untuk stimulus kelompok ${items.filter((r) => imageBriefNos.includes(+r.no)).map((r) => r.no).join(', ')}, isi field stimulus.arahan_gambar_lanjutan dengan arahan foto kontekstual singkat yang kelak dapat dibuat di aplikasi lain. Arahan hanya memperjelas suasana/objek; jangan memuat angka, label, data, ukuran, atau informasi yang menjadi kunci jawaban. Ini hanya catatan untuk guru, BUKAN permintaan untuk membuat gambar sekarang.`
+      : 'Field stimulus.arahan_gambar_lanjutan boleh null.';
+    return `TAHAP: MENYUSUN STIMULUS DAN SOAL
 Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
 Indikator yang diuji:
-${pk.indikator.map((x) => `- ${x.kode}: ${x.kompetensi} (${x.materi})`).join('\n')}
+${pk.indikator.map((x) => `- ${x.kode}: ${x.kompetensi} (${x.materi})`).join('\\n')}
 Untuk SETIAP rancangan berikut, buat satu stimulus orisinal, lalu tepat 3 soal yang hanya dapat dijawab dengan stimulus itu (urut dari pemahaman ke penalaran):
-${items.map((r) => `- No ${r.no}: ${r.jenis_stimulus}. Ide: ${r.ide || '-'}.\n${indLines(pk, r, '   ')}`).join('\n')}
+${items.map((r) => `- No ${r.no}: ${r.jenis_stimulus}. Ide: ${r.ide || '-'}.
+${indLines(pk, r, '   ')}`).join('\\n')}
 Ketentuan stimulus:
 - ${RULES_STIM(pk)}
 - Stimulus harus benar-benar diperlukan untuk menjawab soal; antarkelompok gunakan konteks yang berbeda.
+- Untuk Matematika dan IPAS, buat visual SVG/tabel/grafik yang dipakai langsung untuk menjawab soal bila kompetensi memang membutuhkan visual. Jangan kirim image_prompt atau gambar raster.
+- Matematika: sekurang-kurangnya satu kelompok yang relevan dengan geometri/pengukuran/data harus mempunyai SVG atau tabel dengan angka dan skala akurat; bila bentuk bangun penting, gambar proporsional dan diberi label.
+- IPAS: sekurang-kurangnya satu kelompok yang relevan dengan ekosistem, tubuh, daur hidup, materi, energi, listrik, atau eksperimen harus mempunyai diagram SVG/tabel/grafik yang menjelaskan proses/relasi ilmiah secara benar.
+- ${briefRule}
+- Untuk kelompok lain, pilih visual hanya bila menambah informasi; jangan membuat visual dekoratif.
+- Semua label, angka, skala, satuan, dan data yang diperlukan untuk menjawab harus ada pada teks, SVG, atau tabel yang bisa dibaca. Tidak boleh hanya berada dalam arahan foto eksternal.
 ${VISUAL_SPEC}
 Aturan bentuk soal:
 ${RULES_SOAL(pk)}
-Skema JSON: {"kelompok":[{"no":1,"stimulus":{"judul":"...","jenis":"...","teks":"...","visual":null},"soal":[{"bentuk":"pg","kode_indikator":"I1","level":"Pemahaman","indikator_soal":"...","pertanyaan":"...","opsi":["...","...","...","..."],"kunci":"B","label":null,"pernyataan":null,"pembahasan":"..."}]}]}`;
+Skema JSON: {"kelompok":[{"no":1,"stimulus":{"judul":"...","jenis":"...","teks":"...","arahan_gambar_lanjutan":null,"visual":null},"soal":[{"bentuk":"pg","kode_indikator":"I1","level":"Pemahaman","indikator_soal":"...","pertanyaan":"...","opsi":["...","...","...","..."],"kunci":"B","label":null,"pernyataan":null,"pembahasan":"..."}]}]}`;
+  };
   const pValidasi = (pk, groups) => `TAHAP: VALIDASI
 Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
 Periksa setiap soal: (1) sesuai indikator, (2) sesuai stimulus, (3) kalimat jelas, (4) bentuk soal tepat, (5) kunci benar (${/indonesia/i.test(pk.mapel) ? 'harus dapat dibuktikan dari teks' : 'hitung ulang setiap perhitungan'}), (6) pembahasan konsisten dengan kunci, (7) pengecoh layak, (8) tidak ada jawaban ganda, (9) informasi cukup, (10) tidak duplikat.
@@ -10097,112 +10134,236 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
     return o;
   }
 
-  // ---------------- Pipeline utama ----------------
-  const PER_CALL = 2; // kelompok (stimulus + 3 soal) per permintaan
+  // ---------------- Pipeline utama: AI menyusun semua mapel, termasuk IPAS ----------------
+  const PER_CALL = 2; // dua kelompok stimulus per permintaan agar respons tetap ringkas dan hemat kuota gratis.
+  function ipasQuota(count) {
+    const keys = ['pg', 'pgk', 'bs'];
+    const shares = [0.5, 0.3, 0.2];
+    const quota = {};
+    const fractions = [];
+    let allocated = 0;
+    keys.forEach((key, i) => {
+      const exact = count * shares[i];
+      quota[key] = Math.floor(exact);
+      allocated += quota[key];
+      fractions.push({ key, fraction: exact - Math.floor(exact), order: i });
+    });
+    fractions.sort((a, b) => b.fraction - a.fraction || a.order - b.order);
+    for (let i = 0; i < count - allocated; i++) quota[fractions[i].key]++;
+    return quota;
+  }
+  function ipasTypeQueue(count) {
+    const quota = ipasQuota(count);
+    const used = { pg: 0, pgk: 0, bs: 0 };
+    const out = [];
+    // Weighted round-robin menjaga komposisi tepat sekaligus tidak mengelompokkan satu tipe terlalu lama.
+    for (let i = 0; i < count; i++) {
+      const keys = Object.keys(quota).filter((k) => used[k] < quota[k]);
+      keys.sort((a, b) => ((i + 1) * quota[b] / count - used[b]) - ((i + 1) * quota[a] / count - used[a]));
+      const k = keys[0];
+      out.push(k); used[k]++;
+    }
+    return out;
+  }
+  function subjectInfo(mapel) {
+    const m = String(mapel || '');
+    if (/ipas|sains|ilmu\s+pengetahuan\s+alam/i.test(m)) return { subject: 'ipas', subjectName: 'IPAS (Literasi Sains)' };
+    if (/indonesia/i.test(m)) return { subject: 'bi', subjectName: 'Bahasa Indonesia' };
+    if (/matematika|numerasi/i.test(m)) return { subject: 'mtk', subjectName: 'Matematika' };
+    return null;
+  }
+  function completePlan(pk, targetGroups) {
+    const src = Array.isArray(pk.rancangan) ? pk.rancangan.slice(0, targetGroups) : [];
+    const inds = pk.indikator || [];
+    if (!inds.length) throw new AIError(`AI tidak mengidentifikasi indikator untuk ${pk.mapel}.`);
+    const codeAt = (n) => (inds[n % inds.length] || inds[0]).kode;
+    const out = [];
+    for (let i = 0; i < targetGroups; i++) {
+      const r = Object.assign({}, src[i] || {});
+      let codes = Array.isArray(r.kode_indikator) ? r.kode_indikator.filter((k) => inds.some((x) => x.kode === k)) : [];
+      for (let j = 0; j < 3; j++) {
+        const candidate = codeAt(i * 3 + j);
+        if (codes.length < 3 && !codes.includes(candidate)) codes.push(candidate);
+      }
+      while (codes.length < 3) codes.push(codeAt(i + codes.length));
+      out.push(Object.assign({}, r, {
+        no: i + 1,
+        jenis_stimulus: r.jenis_stimulus || (subjectInfo(pk.mapel).subject === 'ipas' ? 'pengamatan atau fenomena sains dengan visual' : 'stimulus kontekstual'),
+        ide: r.ide || `Konteks baru untuk menguji indikator ${codes.join(', ')}`,
+        kode_indikator: codes.slice(0, 3),
+        bentuk: Array.isArray(r.bentuk) ? r.bentuk.slice(0, 3) : ['pg', 'pgk', 'bs'],
+      }));
+    }
+    return out;
+  }
   async function run(text, opts, hooks, signal) {
-    const count = opts.count || 0;
+    const count = Math.max(3, opts.count || 30);
     reqStat.sent = 0; reqStat.cached = 0; reqStat.models = {};
-    // 1. Analisis
-    hooks.tracks([{ label: 'Menganalisis kisi-kisi dengan AI', subject: null }]);
-    hooks.step(0, 0, 'run', 'Mengirim kisi-kisi ke AI…');
-    const an = await ask(pAnalisis(text, count), signal, 0.4, 2, true);
-    // IPAS selalu disusun generator lokal (gambar soal dari pustaka bawaan), jadi paket IPAS dari AI dilewati.
-    const isIpa = (m) => /\bipas?\b|sains|ilmu\s+pengetahuan\s+alam/i.test(String(m || ''));
-    const all = (an.paket || []).filter((p) => p && Array.isArray(p.rancangan) && p.rancangan.length && Array.isArray(p.indikator));
-    const paket = all.filter((p) => !isIpa(p.mapel));
-    if (!paket.length) throw new AIError(all.length ? 'Kisi-kisi ini berisi IPAS. Mode AI untuk IPAS belum tersedia, jadi gunakan generator lokal untuk IPAS.' : 'AI tidak menemukan mata pelajaran atau rancangan dari kisi-kisi.');
-    const subjOf = (m) => (/indonesia/i.test(m) ? 'bi' : 'mtk');
-    hooks.tracks(paket.map((p) => ({ label: `Paket ${p.mapel} — ${p.jenjang || 'Kelas 6 SD/MI'}`, subject: subjOf(p.mapel), subjectName: /indonesia/i.test(p.mapel) ? 'Bahasa Indonesia' : 'Matematika' })));
-    paket.forEach((p, ti) => hooks.step(ti, 0, 'done', `${p.indikator.length} indikator dikenali; jenjang ${p.jenjang || 'Kelas 6 SD/MI'}.`));
+    // 1. Analisis seluruh mapel dengan model AI.
+    hooks.tracks([{ label: 'Menganalisis kisi-kisi dengan Gemini', subject: null }]);
+    hooks.step(0, 0, 'run', 'Gemini menganalisis kisi-kisi dan mendeteksi Matematika, Bahasa Indonesia, serta IPAS…');
+    const an = await ask(pAnalisis(text, count), signal, 0.35, 2, true);
+    const all = (an.paket || []).filter((p) => p && Array.isArray(p.rancangan) && Array.isArray(p.indikator));
+    const paket = all.map((p) => ({ raw: p, info: subjectInfo(p.mapel) })).filter((x) => x.info && x.raw.indikator.length);
+    if (!paket.length) throw new AIError('Gemini belum berhasil mengenali Matematika, Bahasa Indonesia, atau IPAS dari kisi-kisi. Periksa teks kisi-kisi lalu coba lagi.');
+    const labels = paket.map(({ raw, info }) => ({ label: `Paket ${info.subjectName} — ${raw.jenjang || 'Kelas 6 SD/MI'}`, subject: info.subject, subjectName: info.subjectName }));
+    hooks.tracks(labels);
+    paket.forEach(({ raw }, ti) => hooks.step(ti, 0, 'done', `${raw.indikator.length} indikator dianalisis oleh Gemini; jenjang ${raw.jenjang || 'Kelas 6 SD/MI'}.`));
+
     const out = [];
     for (let ti = 0; ti < paket.length; ti++) {
-      const pk = paket[ti];
+      const pk = paket[ti].raw;
+      const info = paket[ti].info;
       pk.jenjang = pk.jenjang || 'Kelas 6 SD/MI';
-      // 2. Kompetensi
+      // 2. Kompetensi dan rencana: jumlah soal dikunci di aplikasi, bukan diserahkan pada perkiraan model.
       hooks.step(ti, 1, 'run');
-      let plan = pk.rancangan.slice(0, count ? Math.round(count / 3) : 12).map((r, i) => Object.assign({ no: i + 1 }, r));
+      const targetGroups = Math.ceil(count / 3);
+      const plan = completePlan(pk, targetGroups);
       const meta = {};
       pk.indikator.forEach((x) => { meta[x.kode] = { code: 'AI-' + x.kode, label: x.kompetensi || x.kode, materi: x.materi || pk.mapel, level: x.level }; });
-      const used = new Set(plan.flatMap((r) => r.kode_indikator || []));
-      hooks.step(ti, 1, 'done', `${plan.length} kelompok stimulus × 3 soal; ${used.size} dari ${pk.indikator.length} indikator masuk rancangan.`);
-      // 3–4. Stimulus + soal: dua kelompok per permintaan (hemat kuota API key gratis)
-      hooks.step(ti, 2, 'run', `Menulis stimulus dan soal (${Math.ceil(plan.length / PER_CALL)} permintaan, ${PER_CALL} kelompok per permintaan)…`);
-      const chunks = []; for (let i = 0; i < plan.length; i += PER_CALL) chunks.push(plan.slice(i, i + PER_CALL));
-      const stims = {}, raws = {}; const fails = [];
+      if (info.subject === 'ipas') {
+        const qTypes = ipasTypeQueue(count);
+        plan.forEach((r, i) => { r.bentuk = qTypes.slice(i * 3, i * 3 + 3); });
+      }
+      hooks.step(ti, 1, 'done', `${plan.length} kelompok stimulus disiapkan oleh Gemini; semua indikator dipetakan. ${info.subject === 'ipas' ? 'Komposisi IPAS dikunci: 50% PG, 30% MCMA, 20% soal kompleks berbasis pernyataan.' : 'Bentuk soal divariasikan sesuai indikator.'}`);
+
+      // 3. Stimulus dan soal: AI harus menghasilkan tepat 3 soal per kelompok.
+      hooks.step(ti, 2, 'run', `Gemini menyusun ${count} soal dalam ${plan.length} kelompok stimulus…`);
+      const chunks = [];
+      for (let i = 0; i < plan.length; i += PER_CALL) chunks.push(plan.slice(i, i + PER_CALL));
+      const stims = {}, raws = {}, fails = [];
       let doneC = 0;
       const fatal = (e) => e.name === 'AbortError' || e.rate || e.busy;
-      // Mengambil hasil per kelompok; mengembalikan rancangan yang belum berhasil.
       const take = (res, items) => {
         const list = Array.isArray(res && res.kelompok) ? res.kelompok : [];
         return items.filter((r, k) => {
           const item = list.find((x) => +x.no === r.no) || (list.length === items.length ? list[k] : null);
           if (!item) return true;
           const st = normStimulus(item.stimulus || item);
-          if (!(st.text || st.visuals.length) || !Array.isArray(item.soal) || !item.soal.length) return true;
+          if (!(st.text || st.visuals.length) || !Array.isArray(item.soal) || item.soal.length !== 3) return true;
+          if (info.subject === 'ipas') {
+            const actualTypes = item.soal.map((q) => TYPE_MAP[String(q.bentuk || q.tipe || q.type || 'pg').toLowerCase().replace(/[^a-z_]/g, '')] || 'pg');
+            if (actualTypes.some((type, i) => type !== (r.bentuk || [])[i])) return true;
+          }
           stims[r.no] = st; raws[r.no] = item.soal; return false;
         });
       };
       const single = async (r) => {
-        try { if (take(await ask(pKelompok(pk, [r]), signal, 0.75, 1, true), [r]).length) fails.push(r.no); } catch (e) { if (fatal(e)) throw e; fails.push(r.no); }
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const missing = take(await ask(pKelompok(pk, [r]), signal, 0.65, 1, false), [r]);
+            if (!missing.length) return;
+          } catch (e) {
+            if (fatal(e)) throw e;
+            if (attempt === 1) throw e;
+          }
+        }
+        fails.push(r.no);
       };
-      await pool(chunks, 2, async (b) => {
+      await pool(chunks, 1, async (batch) => {
         let missing;
-        // Permintaan gabungan tidak diulang bila gagal (mis. batas waktu ±60 detik Apps Script);
-        // kelompok yang belum jadi langsung diminta satu per satu.
-        try { missing = take(await ask(pKelompok(pk, b), signal, 0.75, b.length > 1 ? 0 : 2, true), b); } catch (e) { if (fatal(e)) throw e; missing = b; }
-        for (const r of missing) { if (b.length > 1) await single(r); else fails.push(r.no); }
-        doneC++; hooks.sub(ti, doneC / chunks.length);
+        try { missing = take(await ask(pKelompok(pk, batch), signal, 0.65, batch.length > 1 ? 0 : 2, true), batch); }
+        catch (e) { if (fatal(e)) throw e; missing = batch; }
+        for (const r of missing) await single(r);
+        doneC++;
+        hooks.sub(ti, doneC / chunks.length);
+        hooks.step(ti, 2, 'run', `${Object.keys(stims).length} dari ${plan.length} stimulus lengkap; Gemini masih menyusun kelompok berikutnya…`);
       }, signal);
-      const okPlan = plan.filter((r) => stims[r.no]);
-      if (!okPlan.length) throw new AIError('AI gagal membuat stimulus dan soal.');
-      hooks.step(ti, 2, 'done', `${okPlan.length} stimulus dibuat: ${okPlan.map((r) => stims[r.no].kind.toLowerCase()).slice(0, 10).join(', ')}.`);
-      hooks.step(ti, 3, 'done', `${okPlan.reduce((n, r) => n + Math.min(3, raws[r.no].length), 0)} soal tersusun${fails.length ? `; ${fails.length} kelompok gagal dan dilewati` : ''}.`);
-      // 5. Kunci & normalisasi
-      hooks.step(ti, 4, 'run');
+
+      const okPlan = plan.filter((r) => stims[r.no] && raws[r.no] && raws[r.no].length === 3);
+      if (okPlan.length !== plan.length) {
+        const missing = plan.filter((r) => !stims[r.no]).map((r) => r.no);
+        throw new AIError(`Gemini baru menyelesaikan ${okPlan.length} dari ${plan.length} kelompok stimulus. Kelompok ${missing.join(', ')} belum lengkap. Tidak ada paket parsial yang disimpan; tekan “Lanjutkan dengan AI” untuk mencoba bagian yang belum selesai.`);
+      }
+      hooks.step(ti, 2, 'done', `${okPlan.length} stimulus dan ${okPlan.length * 3} soal berhasil dibuat langsung oleh Gemini.`);
+
+      // 4. Normalisasi soal dan kunci; paket tidak boleh dianggap selesai bila satu soal hilang.
+      hooks.step(ti, 3, 'run');
       const groups = [];
       okPlan.forEach((r) => {
         const qs = [];
-        (raws[r.no] || []).slice(0, 3).forEach((rq, k) => {
+        (raws[r.no] || []).forEach((rq, k) => {
           const kode = rq.kode_indikator || (r.kode_indikator || [])[k];
           const m = meta[kode] || { code: 'AI-' + (kode || 'X'), label: kode || 'Kompetensi', materi: pk.mapel };
-          try { const q = normQuestion(rq, m); if ((q.options && q.options.length >= 3 && (q.type === 'pg' ? q.key : q.key.length)) || (q.statements && q.statements.length >= 2)) qs.push(q); } catch (e) { /* lewati */ }
+          const q = normQuestion(rq, m);
+          const structurallyValid = q.type === 'pg'
+            ? Array.isArray(q.options) && q.options.length >= 4 && !!q.key
+            : q.type === 'pgk'
+              ? Array.isArray(q.options) && q.options.length >= 4 && Array.isArray(q.key) && q.key.length >= 2
+              : Array.isArray(q.statements) && q.statements.length >= 2;
+          if (!structurallyValid || !q.explain) throw new AIError(`Kelompok ${r.no}, soal ${k + 1}: struktur opsi/kunci atau pembahasan belum lengkap. Ulangi pembuatan dengan AI.`);
+          qs.push(q);
         });
-        if (qs.length) groups.push({ id: U.uid('g'), stimulus: stims[r.no], questions: qs, gen: { ai: true, plan: r } });
+        if (qs.length !== 3) throw new AIError(`Kelompok ${r.no} tidak berisi tepat tiga soal.`);
+        groups.push({ id: U.uid('g'), stimulus: stims[r.no], questions: qs, gen: { ai: true, plan: r } });
       });
-      if (groups.length < Math.max(1, Math.ceil(okPlan.length / 2))) throw new AIError('Sebagian besar soal dari AI tidak dapat dibaca. Coba lagi.');
       const nq = groups.reduce((n, g) => n + g.questions.length, 0);
-      hooks.step(ti, 4, 'done', `${nq} kunci jawaban dan pembahasan dipetakan ke format naskah.`);
-      // 6. Validasi silang AI (satu permintaan untuk seluruh naskah) + validasi lokal
-      hooks.step(ti, 5, 'run', 'AI memeriksa ulang kunci dan pembahasan seluruh soal…');
+      if (nq !== count) throw new AIError(`Target ${count} soal, tetapi Gemini menghasilkan ${nq}. Paket tidak disimpan agar tidak ada naskah yang kurang.`);
+      if (info.subject === 'ipas') {
+        const actual = groups.flatMap((g) => g.questions).reduce((o, q) => { o[q.type] = (o[q.type] || 0) + 1; return o; }, {});
+        const expected = ipasQuota(count);
+        if (Object.keys(expected).some((k) => (actual[k] || 0) !== expected[k])) {
+          throw new AIError(`Komposisi TKAD IPAS belum tepat. Target: ${expected.pg} PG, ${expected.pgk} MCMA, ${expected.bs} klasifikasi/pernyataan kompleks. Hasil: ${actual.pg || 0} PG, ${actual.pgk || 0} MCMA, ${actual.bs || 0} kompleks. Paket belum disimpan.`);
+        }
+      }
+      hooks.step(ti, 3, 'done', `${nq} soal dinormalisasi lengkap; seluruh kunci dan pembahasan tersedia.`);
+
+      // 5. Visual gratis: Gemini menyiapkan SVG, tabel, grafik, dan piktogram.
+      // Tidak ada panggilan ke model gambar atau endpoint raster berbayar.
+      hooks.step(ti, 4, 'run', 'Memeriksa diagram SVG, tabel, grafik, serta arahan visual untuk pengayaan di aplikasi lain…');
+      let visualCount = 0, imageBriefCount = 0;
+      groups.forEach((g) => {
+        g.stimulus.visuals = (g.stimulus.visuals || []).filter((v) => v && v.type !== 'image_prompt' && v.type !== 'image');
+        visualCount += g.stimulus.visuals.length;
+        if (g.stimulus.imageBrief) imageBriefCount++;
+      });
+      hooks.sub(ti, 1);
+      hooks.step(ti, 4, 'done', `${visualCount} visual SVG/tabel/grafik siap; ${imageBriefCount} arahan foto opsional disiapkan untuk pengayaan di aplikasi lain. Tidak ada API gambar berbayar yang dipanggil.`);
+
+      // 6. Validasi silang AI + validasi lokal. Pemeriksaan AI boleh memberi koreksi, bukan mengubah jumlah soal.
+      hooks.step(ti, 5, 'run', 'Gemini memeriksa kesesuaian stimulus, kunci, dan pembahasan…');
       let fixed = 0, vErr = 0;
       try {
-        const payload = groups.map((g, gi) => ({ no_kelompok: gi + 1, stimulus: { judul: g.stimulus.title, teks: g.stimulus.text, visual: g.stimulus.visuals.map((v) => (v.type === 'svg' ? '[gambar]' : v)) }, soal: g.questions.map(exportQ) }));
-        const res = await ask(pValidasi(pk, payload), signal, 0.2, 1, true);
+        const payload = groups.map((g, gi) => ({
+          no_kelompok: gi + 1,
+          stimulus: { judul: g.stimulus.title, teks: g.stimulus.text, arahan_gambar_lanjutan: g.stimulus.imageBrief || null, visual: g.stimulus.visuals.map((v) => (v.type === 'svg' ? '[diagram SVG]' : v.type === 'table' ? '[tabel]' : v.type === 'bar' || v.type === 'line' || v.type === 'pie' || v.type === 'picto' ? '[grafik/piktogram]' : v)) },
+          soal: g.questions.map(exportQ),
+        }));
+        const res = await ask(pValidasi(pk, payload), signal, 0.15, 1, true);
         (res.hasil || []).forEach((hh) => {
           const g = groups[(hh.no_kelompok || 0) - 1]; if (!g) return;
           const qi = (hh.no_soal || 0) - 1; const q = g.questions[qi]; if (!q) return;
           if (hh.status === 'diperbaiki' && hh.soal) {
-            try { const nq2 = normQuestion(Object.assign({ bentuk: q.type, kode_indikator: null, level: q.level, indikator_soal: q.indikator }, hh.soal), { code: q.code, label: q.submateri, materi: q.materi }); nq2.aiChecked = true; nq2.aiNote = hh.catatan || ''; g.questions[qi] = nq2; fixed++; } catch (e) { /* biarkan */ }
+            try {
+              const nq2 = normQuestion(Object.assign({ bentuk: q.type, kode_indikator: null, level: q.level, indikator_soal: q.indikator }, hh.soal), { code: q.code, label: q.submateri, materi: q.materi });
+              nq2.aiChecked = true; nq2.aiNote = hh.catatan || ''; g.questions[qi] = nq2; fixed++;
+            } catch (e) { /* pertahankan hasil awal agar tidak merusak paket */ }
           } else q.aiChecked = true;
         });
       } catch (e) { if (e.name === 'AbortError') throw e; vErr++; }
       hooks.sub(ti, 1);
+
       const pkg = {
-        id: U.uid('pkg'), v: 1, title: opts.title || pk.judul || `Latihan TKA ${pk.mapel} ${pk.jenjang}`, subject: subjOf(pk.mapel), subjectName: /indonesia/i.test(pk.mapel) ? 'Bahasa Indonesia' : 'Matematika',
-        jenjang: pk.jenjang, durasi: opts.durasi || Math.max(15, nq * 2), createdAt: Date.now(), updatedAt: Date.now(), engine: 'ai', aiModel: lastModel, aiCodes: true, kisi: text,
-        analysis: { codes: pk.indikator.map((x) => ({ code: 'AI-' + x.kode, label: x.kompetensi, el: x.materi, weight: 1 })), notes: [] }, groups, scoring: STORE.settings().scoring || 'parsial',
+        id: U.uid('pkg'), v: 1,
+        title: opts.title || pk.judul || `Latihan ${info.subjectName} ${pk.jenjang}`,
+        subject: info.subject, subjectName: info.subjectName,
+        jenjang: pk.jenjang, durasi: opts.durasi || Math.max(15, nq * (info.subject === 'ipas' ? 3 : 2)),
+        createdAt: Date.now(), updatedAt: Date.now(), engine: 'ai', aiModel: lastModel, visualMode: 'SVG + tabel + grafik (tanpa API gambar berbayar)',
+        aiCodes: true, kisi: text,
+        analysis: { codes: pk.indikator.map((x) => ({ code: 'AI-' + x.kode, label: x.kompetensi, el: x.materi, weight: 1 })), notes: [] },
+        groups, scoring: STORE.settings().scoring || 'parsial',
       };
       cleanPackage(pkg);
       const v = ENGINE.validate(pkg, { codes: pkg.analysis.codes });
       v.fixed = fixed; pkg.validation = v;
-      hooks.step(ti, 5, 'done', `Validasi silang AI: ${fixed} soal diperbaiki${vErr ? ' (pemeriksaan AI dilewati karena gagal; validasi lokal tetap berjalan)' : ''}. Validasi lokal: ${v.summary.ok} lolos, ${v.summary.warn} catatan, ${v.summary.fail} gagal.`);
+      hooks.step(ti, 5, 'done', `Validasi silang AI: ${fixed} soal diperbaiki${vErr ? ' (AI tidak merespons validasi; pemeriksaan lokal tetap dilakukan dan ditandai)' : ''}. Validasi lokal: ${v.summary.ok} lolos, ${v.summary.warn} catatan, ${v.summary.fail} gagal.`);
       hooks.step(ti, 6, 'run');
-      hooks.step(ti, 6, 'done', `Naskah “${pkg.title}” siap: ${nq} soal, ${groups.length} stimulus.`);
+      hooks.step(ti, 6, 'done', `Naskah “${pkg.title}” siap: ${nq} soal, ${groups.length} stimulus, ${visualCount} visual SVG/tabel/grafik, ${imageBriefCount} arahan gambar opsional.`);
       out.push(pkg);
     }
-    cacheClear(); // proses selesai: cache bagian tidak diperlukan lagi
-    const last = out.length - 1, lp = out[last];
-    hooks.step(last, 6, 'done', `Naskah “${lp.title}” siap. Total permintaan AI: ${reqStat.sent}${reqStat.cached ? ` (+${reqStat.cached} bagian dipakai ulang dari proses sebelumnya)` : ''}${Object.keys(reqStat.models).length > 1 ? `; model: ${Object.keys(reqStat.models).join(', ')}` : ''}.`);
+    cacheClear();
+    const lp = out[out.length - 1];
+    hooks.step(out.length - 1, 6, 'done', `Naskah selesai. Total permintaan AI teks: ${reqStat.sent}${reqStat.cached ? ` (+${reqStat.cached} bagian dari cache)` : ''}; model teks: ${Object.keys(reqStat.models).join(', ') || lastModel || '-'}; visual: SVG/tabel/grafik lokal dari data AI; tidak ada API gambar berbayar.`);
     return out;
   }
 
@@ -10237,148 +10398,161 @@ Soal yang diganti: ${JSON.stringify(q.text)}`;
 
   // ---------------- Kode proxy untuk disalin guru ----------------
   const PROXY_GAS = `/**
- * Proxy TKA GURU untuk Gemini API (Google Apps Script) — versi 3.
- * Kunci API disimpan di Script Properties, BUKAN di file HTML.
- * 1) Project Settings > Script Properties: GEMINI_API_KEY = (kunci dari Google AI Studio)
- *    Opsional: ACCESS_TOKEN = (kata sandi bebas, isi juga di aplikasi)
- *    Opsional: GEMINI_MODEL = gemini-flash-latest (model utama)
- *    Opsional: GEMINI_FALLBACK_MODEL = gemini-flash-lite-latest (model cadangan bila model utama
- *              sedang sibuk atau kuota hariannya habis; boleh beberapa, dipisah koma; isi - untuk mematikan)
- * 2) Deploy > New deployment > Web app; Execute as: Me; Who has access: Anyone.
- * 3) Salin URL web app (berakhiran /exec) ke Pengaturan TKA GURU.
- * Memperbarui kode: Deploy > Manage deployments > ikon pensil > Version: New version > Deploy
- * (URL /exec tetap sama).
+ * TKA GURU — Gemini FREE TEXT PROXY v7
+ * Mode: Gemini teks + visual SVG/tabel. Tidak ada API gambar / Nano Banana.
+ * Script Properties wajib: GEMINI_API_KEY
+ * Opsional: ACCESS_TOKEN, GEMINI_MODEL (hanya model dalam allowlist gratis),
+ * GEMINI_FALLBACK_MODEL (hanya model dalam allowlist gratis).
+ * Deploy Web App: Execute as Me; Who has access: Anyone.
+ * Perubahan kode: Deploy > Manage deployments > Edit > New version > Deploy.
  */
-var PROXY_VERSION = 3;
-var DEFAULT_MODEL = 'gemini-flash-latest';
-var DEFAULT_FALLBACK = 'gemini-flash-lite-latest';
-var BUSY = [500, 502, 503, 504];
+var PROXY_VERSION = 7;
+var DEFAULT_MODEL = 'gemini-3.8-flash';
+var DEFAULT_FALLBACK = 'gemini-3.7-flash,gemini-3.6-flash';
+var FREE_TEXT_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
 
 function doPost(e) {
   try {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var props = PropertiesService.getScriptProperties();
-    var token = props.getProperty('ACCESS_TOKEN') || '';
-    if (token && body.token !== token) return out_({ ok: false, error: 'Token akses tidak cocok.' });
-    var key = props.getProperty('GEMINI_API_KEY');
-    if (!key) return out_({ ok: false, error: 'GEMINI_API_KEY belum diisi di Script Properties.' });
-    var model = props.getProperty('GEMINI_MODEL') || DEFAULT_MODEL;
-    var fb = String(props.getProperty('GEMINI_FALLBACK_MODEL') || DEFAULT_FALLBACK).trim();
-    var fallbacks = fb === '-' ? [] : fb.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x && x !== model; });
-    if (body.ping) return out_({ ok: true, text: 'pong', model: model, fallback: fallbacks.join(', '), version: PROXY_VERSION });
+    var expectedToken = props.getProperty('ACCESS_TOKEN') || '';
+    if (expectedToken && String(body.token || '') !== expectedToken) return out_({ ok: false, error: 'Token akses tidak cocok.' });
+    var apiKey = props.getProperty('GEMINI_API_KEY');
+    if (!apiKey) return out_({ ok: false, error: 'GEMINI_API_KEY belum diisi di Script Properties.' });
+    if (body.image) return out_({ ok: false, error: 'Mode gratis TKA GURU hanya menggunakan AI teks dan SVG/tabel. API gambar berbayar sengaja dinonaktifkan.' });
+
+    var configured = props.getProperty('GEMINI_MODEL') || DEFAULT_MODEL;
+    var primary = FREE_TEXT_MODELS.indexOf(configured) >= 0 ? configured : DEFAULT_MODEL;
+    var fallbackRaw = props.getProperty('GEMINI_FALLBACK_MODEL') || DEFAULT_FALLBACK;
+    var fallback = String(fallbackRaw).split(',').map(function(x) { return x.trim(); }).filter(function(x, i, a) {
+      return FREE_TEXT_MODELS.indexOf(x) >= 0 && x !== primary && a.indexOf(x) === i;
+    });
+    FREE_TEXT_MODELS.forEach(function(m) { if (m !== primary && fallback.indexOf(m) < 0) fallback.push(m); });
+    var models = [primary].concat(fallback);
+
+    var prompt = body.ping ? 'Balas tepat satu kata: TKA_READY' : String(body.prompt || '');
+    if (!prompt) return out_({ ok: false, error: 'Prompt teks kosong.' });
     var payload = {
-      contents: [{ role: 'user', parts: [{ text: String(body.prompt || '') }] }],
-      generationConfig: { temperature: typeof body.temperature === 'number' ? body.temperature : 0.7, responseMimeType: body.json ? 'application/json' : 'text/plain' }
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: body.ping ? 32 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)),
+        responseMimeType: body.json ? 'application/json' : 'text/plain'
+      }
     };
     if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
-    // Setiap model dicoba; server sibuk (5xx) diulang sekali. Kuota per menit (429 singkat) dikembalikan
-    // ke aplikasi agar aplikasi menunggu; kuota harian habis / model tidak tersedia -> pindah ke model cadangan.
-    var models = [model].concat(fallbacks);
-    var r = null, used = model, data = {}, retry = '';
-    for (var i = 0; i < models.length; i++) {
-      used = models[i];
-      for (var t = 0; t < 2; t++) {
-        if (t > 0) Utilities.sleep(2000);
-        r = gemini_(used, payload, key);
-        if (BUSY.indexOf(r.code) < 0) break;
-      }
-      data = r.data;
-      if (r.code === 200) break;
-      retry = retryOf_(data);
-      if (r.code === 429 && !longQuota_(data, retry)) break;
-      if (r.code !== 429 && BUSY.indexOf(r.code) < 0) break;
-      if (i + 1 < models.length) Utilities.sleep(500);
-    }
-    if (r.code !== 200) {
-      return out_({ ok: false, status: r.code, model: used, retryDelay: retry, error: (data.error && data.error.message) || ('HTTP ' + r.code) });
-    }
-    var parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
-    var text = parts.filter(function (p) { return !p.thought; }).map(function (p) { return p.text || ''; }).join('');
-    return out_({ ok: true, text: text, model: used, version: PROXY_VERSION });
+
+    var result = callFreeModels_(models, payload, apiKey);
+    if (result.code !== 200) return out_({
+      ok: false, status: result.code, model: result.model,
+      retryDelay: result.retryDelay || '', error: result.error || 'Permintaan ke Gemini gagal.'
+    });
+    var parts = ((((result.data || {}).candidates || [])[0] || {}).content || {}).parts || [];
+    var text = parts.filter(function(p) { return !p.thought; }).map(function(p) { return p.text || ''; }).join('');
+    if (body.ping && !/TKA_READY/i.test(text)) return out_({ ok: false, error: 'Model merespons tetapi tes teks tidak sesuai. Coba ulangi.' });
+    return out_({
+      ok: true, text: text, model: result.model, fallback: fallback.join(', '),
+      version: PROXY_VERSION, freeMode: true, visualMode: 'SVG + tabel + grafik',
+      allowedModels: FREE_TEXT_MODELS, configuredModelWasRestricted: configured !== primary
+    });
   } catch (err) {
-    return out_({ ok: false, error: String(err) });
+    return out_({ ok: false, error: String(err && err.message ? err.message : err) });
   }
 }
 
-function retryOf_(data) {
-  var ri = ((data.error && data.error.details) || []).filter(function (d) { return String(d['@type'] || '').indexOf('RetryInfo') > -1; })[0];
-  return ri ? String(ri.retryDelay || '') : '';
+function callFreeModels_(models, payload, apiKey) {
+  var last = { code: 0, error: 'Tidak ada model gratis yang dapat dihubungi.' };
+  for (var i = 0; i < models.length; i++) {
+    var model = models[i];
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
+    var response;
+    try {
+      response = UrlFetchApp.fetch(url, {
+        method: 'post', contentType: 'application/json',
+        headers: { 'x-goog-api-key': apiKey }, payload: JSON.stringify(payload), muteHttpExceptions: true
+      });
+    } catch (err) {
+      last = { code: 0, model: model, error: String(err) };
+      continue;
+    }
+    var code = response.getResponseCode();
+    var raw = response.getContentText() || '{}';
+    var data;
+    try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; }
+    if (code === 200) return { code: 200, model: model, data: data };
+    var msg = data && data.error && data.error.message ? data.error.message : raw;
+    var retry = '';
+    try {
+      var details = data.error.details || [];
+      for (var d = 0; d < details.length; d++) if (details[d].retryDelay) retry = details[d].retryDelay;
+    } catch (e2) {}
+    last = { code: code, model: model, error: String(msg).slice(0, 1800), retryDelay: retry };
+    if ([400, 401, 403].indexOf(code) >= 0) break;
+  }
+  return last;
 }
-
-function longQuota_(data, retry) {
-  var msg = String((data.error && data.error.message) || '');
-  var sec = parseFloat(retry) || 0;
-  return /limit:\\s*0\\b/i.test(msg) || /per.?day|daily/i.test(msg) || sec > 60;
-}
-
-function gemini_(model, payload, key) {
-  var res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-    method: 'post', contentType: 'application/json', payload: JSON.stringify(payload),
-    headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
-  });
-  var data = {};
-  try { data = JSON.parse(res.getContentText() || '{}'); } catch (x) { data = { error: { message: 'Respons Gemini tidak dapat dibaca (HTTP ' + res.getResponseCode() + ').' } }; }
-  return { code: res.getResponseCode(), data: data };
-}
-
-function doGet() { return out_({ ok: true, info: 'Proxy TKA GURU aktif. Gunakan metode POST.', version: PROXY_VERSION }); }
 
 function out_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doGet() {
+  return out_({ ok: true, info: 'TKA GURU free text proxy aktif. Hanya Gemini teks + SVG/tabel; API gambar tidak tersedia pada mode ini.', version: PROXY_VERSION, freeMode: true, allowedModels: FREE_TEXT_MODELS });
 }`;
-  const PROXY_CF = `// Proxy TKA GURU untuk Gemini API (Cloudflare Worker) — versi 3.
-// Simpan kunci sebagai secret: npx wrangler secret put GEMINI_API_KEY
-// Opsional: ACCESS_TOKEN, GEMINI_MODEL, dan GEMINI_FALLBACK_MODEL (dipisah koma; "-" untuk mematikan).
-const PROXY_VERSION = 3;
-const BUSY = [500, 502, 503, 504];
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const PROXY_CF = `// TKA GURU — Cloudflare Worker FREE TEXT PROXY v7
+// Secrets: GEMINI_API_KEY (required), ACCESS_TOKEN (optional).
+// Vars: GEMINI_MODEL (only allowlisted free models), GEMINI_FALLBACK_MODEL (optional).
+const VERSION = 7;
+const FREE_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
+const DEFAULT_MODEL = 'gemini-3.8-flash';
+const DEFAULT_FALLBACK = ['gemini-3.7-flash', 'gemini-3.6-flash'];
+const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' } });
+
 export default {
   async fetch(request, env) {
-    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
-    const json = (o) => new Response(JSON.stringify(o), { headers: { ...cors, 'Content-Type': 'application/json' } });
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    if (request.method !== 'POST') return json({ ok: true, info: 'Proxy TKA GURU aktif.', version: PROXY_VERSION });
+    if (request.method === 'GET') return json({ ok: true, version: VERSION, freeMode: true, info: 'TKA GURU free text proxy aktif; tidak ada API gambar.' });
+    if (request.method !== 'POST') return json({ ok: false, error: 'Method tidak didukung.' }, 405);
     try {
       const body = await request.json();
-      if (env.ACCESS_TOKEN && body.token !== env.ACCESS_TOKEN) return json({ ok: false, error: 'Token akses tidak cocok.' });
-      const model = env.GEMINI_MODEL || 'gemini-flash-latest';
-      const fb = String(env.GEMINI_FALLBACK_MODEL || 'gemini-flash-lite-latest').trim();
-      const fallbacks = fb === '-' ? [] : fb.split(',').map((x) => x.trim()).filter((x) => x && x !== model);
-      if (body.ping) return json({ ok: true, text: 'pong', model, fallback: fallbacks.join(', '), version: PROXY_VERSION });
+      if (env.ACCESS_TOKEN && String(body.token || '') !== env.ACCESS_TOKEN) return json({ ok: false, error: 'Token akses tidak cocok.' }, 401);
+      if (!env.GEMINI_API_KEY) return json({ ok: false, error: 'Secret GEMINI_API_KEY belum diatur.' }, 500);
+      if (body.image) return json({ ok: false, error: 'Mode gratis TKA GURU hanya menggunakan AI teks dan SVG/tabel. API gambar berbayar sengaja dinonaktifkan.' }, 400);
+      const configured = env.GEMINI_MODEL || DEFAULT_MODEL;
+      const primary = FREE_MODELS.includes(configured) ? configured : DEFAULT_MODEL;
+      const fallbackConfig = (env.GEMINI_FALLBACK_MODEL || DEFAULT_FALLBACK.join(','));
+      const fallback = String(fallbackConfig).split(',').map(x => x.trim()).filter((x, i, a) => FREE_MODELS.includes(x) && x !== primary && a.indexOf(x) === i);
+      for (const model of FREE_MODELS) if (model !== primary && !fallback.includes(model)) fallback.push(model);
+      const models = [primary, ...fallback];
+      const prompt = body.ping ? 'Balas tepat satu kata: TKA_READY' : String(body.prompt || '');
+      if (!prompt) return json({ ok: false, error: 'Prompt teks kosong.' }, 400);
       const payload = {
-        contents: [{ role: 'user', parts: [{ text: String(body.prompt || '') }] }],
-        generationConfig: { temperature: typeof body.temperature === 'number' ? body.temperature : 0.7, responseMimeType: body.json ? 'application/json' : 'text/plain' },
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: body.ping ? 32 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)), responseMimeType: body.json ? 'application/json' : 'text/plain' }
       };
       if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
-      const models = [model, ...fallbacks];
-      const retryOf = (d) => { const ri = ((d.error && d.error.details) || []).find((x) => String(x['@type'] || '').includes('RetryInfo')); return ri ? String(ri.retryDelay || '') : ''; };
-      const longQuota = (d, retry) => { const msg = String((d.error && d.error.message) || ''); return /limit:\\s*0\\b/i.test(msg) || /per.?day|daily/i.test(msg) || (parseFloat(retry) || 0) > 60; };
-      let r, data = {}, used = model, retry = '';
-      for (let i = 0; i < models.length; i++) {
-        used = models[i];
-        for (let t = 0; t < 2; t++) {
-          if (t > 0) await sleep(2000);
-          r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(used) + ':generateContent', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(payload),
-          });
-          data = await r.json().catch(() => ({ error: { message: 'Respons Gemini tidak dapat dibaca (HTTP ' + r.status + ').' } }));
-          if (!BUSY.includes(r.status)) break;
+      let last = { status: 0, error: 'Tidak ada model gratis yang dapat dihubungi.' };
+      for (const model of models) {
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const parts = data.candidates?.[0]?.content?.parts || [];
+          const text = parts.filter(p => !p.thought).map(p => p.text || '').join('');
+          if (body.ping && !/TKA_READY/i.test(text)) return json({ ok: false, error: 'Model merespons tetapi tes teks tidak sesuai. Coba ulangi.' });
+          return json({ ok: true, text, model, fallback: fallback.join(', '), version: VERSION, freeMode: true, visualMode: 'SVG + tabel + grafik', allowedModels: FREE_MODELS, configuredModelWasRestricted: configured !== primary });
         }
-        if (r.ok) break;
-        retry = retryOf(data);
-        if (r.status === 429 && !longQuota(data, retry)) break;
-        if (r.status !== 429 && !BUSY.includes(r.status)) break;
-        if (i + 1 < models.length) await sleep(500);
+        last = { status: res.status, model, error: data.error?.message || ('HTTP ' + res.status) };
+        if ([400, 401, 403].includes(res.status)) break;
       }
-      if (!r.ok) return json({ ok: false, status: r.status, model: used, retryDelay: retry, error: (data.error && data.error.message) || 'HTTP ' + r.status });
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      return json({ ok: true, text: parts.filter((p) => !p.thought).map((p) => p.text || '').join(''), model: used, version: PROXY_VERSION });
-    } catch (e) {
-      return json({ ok: false, error: String(e) });
+      return json({ ok: false, status: last.status, model: last.model, error: last.error });
+    } catch (err) {
+      return json({ ok: false, error: String(err && err.message ? err.message : err) }, 500);
     }
-  },
+  }
 };`;
-
   return { ready, test, run, regenQuestion, regenGroup, normQuestion, normStimulus, normVisual, parseJSON, PROXY_GAS, PROXY_CF, AIError, SYSTEM, reqStat, cacheCount, cacheClear, PER_CALL };
 })();
 
@@ -10520,7 +10694,14 @@ function sanitizeSvg(str) {
 }
 function cleanPackage(p) {
   // dipakai untuk paket dari AI, impor file, atau tautan
-  const cs = (v) => { if (v && v.type === 'svg') v.svg = sanitizeSvg(v.svg); return v; };
+  const cs = (v) => {
+    if (v && v.type === 'svg') v.svg = sanitizeSvg(v.svg);
+    if (v && v.type === 'image') {
+      const src = String(v.src || '');
+      if (!/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src)) v.src = '';
+    }
+    return v;
+  };
   (p.groups || []).forEach((g) => {
     if (g.stimulus) (g.stimulus.visuals || []).forEach(cs);
     (g.questions || []).forEach((q) => (q.options || []).forEach((o) => { if (o.svg) o.svg = sanitizeSvg(o.svg); }));
@@ -10558,6 +10739,11 @@ function uniqSvgIds(svg) {
 function visHTML(v) {
   if (!v) return '';
   if (v.type === 'table') return tableHTML(v);
+  if (v.type === 'image') {
+    const src = String(v.src || '');
+    if (!/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src)) return '';
+    return `<figure class="fig"><img src="${esc(src)}" alt="${esc(v.alt || 'Gambar pembelajaran')}" loading="lazy">${v.caption ? `<figcaption>${mdi(v.caption)}</figcaption>` : ''}</figure>`;
+  }
   const svg = uniqSvgIds(v.type === 'svg' ? v.svg : chartSVG(v));
   if (!svg) return '';
   return `<figure class="fig">${svg}${v.caption ? `<figcaption>${mdi(v.caption)}</figcaption>` : ''}</figure>`;
@@ -10673,7 +10859,7 @@ function renderTopbar(h) {
   const inst = esc(String(s.school || '').trim() || INSTANSI);
   if (APP.mode === 'siswa') { tb.innerHTML = `<div class="in"><span class="brand">${LOGO}<span>TKA GURU<small>${inst} • Mode latihan siswa</small></span></span></div>`; return; }
   const on = (re) => (re.test(h) ? 'on' : '');
-  const aiOn = s.ai && s.ai.url && s.ai.verifiedAt;
+  const aiOn = AI.ready();
   tb.innerHTML = `<div class="in">
     <a class="brand" href="#/" title="TKA GURU — ${inst}">${LOGO}<span>TKA GURU<small>${inst}</small></span></a>
     <nav class="nav" aria-label="Navigasi utama">
@@ -10682,7 +10868,7 @@ function renderTopbar(h) {
       <a href="#/riwayat" class="${on(/^\/(riwayat|hasil)/)}">${ic('history')}<span>Riwayat</span></a>
       <a href="#/pengaturan" class="${on(/^\/pengaturan/)}">${ic('settings')}<span>Pengaturan</span></a>
     </nav>
-    <a class="ai-chip ${aiOn ? 'on' : ''}" href="#/pengaturan" title="${aiOn ? 'AI Gemini terhubung melalui proxy' : 'AI belum terhubung — generator lokal yang digunakan'}"><i class="dot"></i><span class="lbl">${aiOn ? 'AI terhubung' : 'AI belum terhubung'}</span></a>
+    <a class="ai-chip ${aiOn ? 'on' : ''}" href="#/pengaturan" title="${aiOn ? 'AI Gemini terhubung melalui proxy' : 'AI belum terverifikasi — hubungkan melalui Pengaturan'}"><i class="dot"></i><span class="lbl">${aiOn ? 'AI terhubung' : 'AI belum terhubung'}</span></a>
   </div>`;
 }
 
@@ -10728,7 +10914,7 @@ VIEWS.dash = () => {
   const pkgs = STORE.listPkgs();
   const res = STORE.results();
   const totalQ = pkgs.reduce((a, p) => a + p.n, 0);
-  const aiOn = s.ai && s.ai.url && s.ai.verifiedAt;
+  const aiOn = AI.ready();
   setView(`<div class="wrap">
     <section class="hero">
       <div class="hero-main">
@@ -10744,7 +10930,7 @@ VIEWS.dash = () => {
         <div class="stat"><span>Naskah tersimpan</span><b>${pkgs.length}</b></div>
         <div class="stat"><span>Total soal</span><b>${totalQ}</b></div>
         <div class="stat"><span>Latihan dikerjakan</span><b>${res.length}</b></div>
-        <a class="stat" href="#/pengaturan" style="text-decoration:none;color:inherit"><span>Mesin pembuat soal</span><b style="font-size:16px;line-height:1.3">${aiOn ? 'AI Gemini' : 'Generator lokal'}</b><span>${aiOn ? 'Terhubung melalui proxy' : 'Hubungkan AI di Pengaturan'}</span></a>
+        <a class="stat" href="#/pengaturan" style="text-decoration:none;color:inherit"><span>Mesin pembuat soal</span><b style="font-size:16px;line-height:1.3">${aiOn ? 'AI Gemini' : 'AI perlu disambungkan'}</b><span>${aiOn ? 'Terhubung melalui proxy' : 'Hubungkan AI di Pengaturan'}</span></a>
       </div>
     </section>
     <h2 class="section-title">Naskah Anda <span class="count">${pkgs.length}</span></h2>
@@ -10829,11 +11015,10 @@ ACT['res:clear'] = async () => {
    ========================================================================== */
 VIEWS.create = () => {
   const aiOn = AI.ready();
-  if (!APP.engineChoice) APP.engineChoice = aiOn ? 'ai' : 'lokal';
-  if (!aiOn) APP.engineChoice = 'lokal';
+  if (!APP.engineChoice) APP.engineChoice = 'ai';
   const o = APP.createOpts || { count: 'auto', durasi: '', title: '' };
   setView(`<div class="wrap">
-    <div class="page-head"><div><h1>Buat Naskah Latihan TKA</h1><p>${aiOn ? 'Masukkan kisi-kisi materi dan biarkan AI membuat naskah latihan secara otomatis.' : 'Masukkan kisi-kisi materi, lalu naskah latihan disusun otomatis oleh generator lokal (AI dapat dihubungkan di Pengaturan).'} Mata pelajaran, jenjang, dan kompetensi dikenali dari teks yang Anda tempel.</p></div></div>
+    <div class="page-head"><div><h1>Buat Naskah Latihan TKA</h1><p>${APP.engineChoice === 'lokal' ? 'Mode generator lokal dipilih secara sadar untuk sesi ini.' : aiOn ? 'Gemini menyusun soal, stimulus, kunci, dan pembahasan; visual dibuat sebagai SVG, tabel, grafik, dan piktogram tanpa API gambar berbayar.' : 'Mode AI gratis adalah pilihan bawaan. Hubungkan dan verifikasi Gemini di Pengaturan sebelum menekan Generate.'} Mata pelajaran, jenjang, dan kompetensi dikenali dari teks yang Anda tempel.</p></div></div>
     <div class="grid-2">
       <section class="panel">
         <label class="lbl" for="kisi">Kisi-kisi materi</label>
@@ -10855,8 +11040,11 @@ VIEWS.create = () => {
           ${aiOn ? `<div class="seg" role="group" aria-label="Pilih mesin">
               <button data-act="kisi:engine" data-e="ai" class="${APP.engineChoice === 'ai' ? 'on' : ''}">${ic('spark')} AI Gemini</button>
               <button data-act="kisi:engine" data-e="lokal" class="${APP.engineChoice === 'lokal' ? 'on' : ''}">Generator lokal</button></div>
-              <p class="small muted" style="margin:10px 0 0">${APP.engineChoice === 'ai' ? 'AI menulis stimulus dan soal baru dari kisi-kisi, lalu memeriksa ulang kunci jawaban. Mode hemat kuota: sekitar 7 permintaan AI untuk satu mata pelajaran (13 untuk dua), cukup untuk API key gratis. Prosesnya memerlukan internet, sekitar 2–6 menit. Naskah IPAS tetap disusun generator lokal karena gambar soalnya berasal dari pustaka gambar bawaan.' : 'Generator lokal bekerja tanpa internet memakai template soal Matematika, bank bacaan Bahasa Indonesia, dan bank soal bergambar IPAS bawaan. Prosesnya beberapa detik.'}</p>`
-            : `<div class="engine-box"><b>Generator lokal</b> — bekerja tanpa internet memakai template soal Matematika (angka dan konteks dibuat acak, lalu dihitung ulang), bank bacaan Bahasa Indonesia, dan bank soal bergambar IPAS bawaan.<div style="margin-top:8px">AI belum terhubung. Untuk stimulus yang benar-benar baru dari kisi-kisi apa pun, <a href="#/pengaturan">hubungkan AI Gemini melalui proxy</a>.</div></div>`}
+              <p class="small muted" style="margin:10px 0 0">${APP.engineChoice === 'ai' ? 'Gemini membuat soal baru dari kisi-kisi, menyusun stimulus, kunci, dan pembahasan, lalu membuat visual SVG/tabel/grafik yang bisa dicetak. Beberapa stimulus juga menyimpan arahan foto opsional yang dapat Anda ekspor untuk pengayaan di aplikasi lain. Mode ini tidak memanggil Nano Banana atau API gambar berbayar.' : 'Generator lokal bekerja tanpa internet memakai template soal Matematika, bank bacaan Bahasa Indonesia, dan bank soal IPAS bawaan. Ini hanya digunakan karena Anda memilihnya.'}</p>
+              ${APP.engineChoice === 'ai' && !aiOn ? `<div class="callout warn" style="margin-top:10px">AI belum terverifikasi. Hubungkan Gemini pada <a href="#/pengaturan">Pengaturan</a> dan gunakan proxy mode gratis versi 7. Generator tidak akan beralih ke lokal secara otomatis.</div>` : ''}`
+            : APP.engineChoice === 'lokal'
+              ? `<div class="engine-box"><b>Generator lokal dipilih secara sadar.</b> Sesi ini akan menggunakan bank/template lokal. Untuk kembali ke AI, hubungkan dan verifikasi Gemini di <a href="#/pengaturan">Pengaturan</a>.</div>`
+              : `<div class="engine-box"><b>AI Gemini belum terverifikasi.</b> Aplikasi tidak akan otomatis membuat soal dengan generator lokal. <a href="#/pengaturan">Hubungkan dan uji AI Gemini</a> terlebih dahulu. <div style="margin-top:10px"><button class="btn btn-sm" data-act="kisi:engine" data-e="lokal">Saya memilih generator lokal untuk sesi ini</button></div></div>`}
           <details class="adv" style="margin-top:14px" ${o.count !== 'auto' || o.durasi || o.title ? 'open' : ''}>
             <summary>Opsi tambahan (boleh dilewati)</summary>
             <div class="field"><label for="optCount">Jumlah soal per paket</label>
@@ -10890,7 +11078,7 @@ function updateDetect() {
     <div class="small muted" style="margin-bottom:6px">${a.codes.length} kompetensi dikenali → ${ENGINE.autoCount(a)} soal otomatis</div>
     <div class="chips">${a.codes.map((c) => `<span class="chip ${c.extra ? 'gray' : ''}" title="${esc(c.el)}">${esc(c.label)}</span>`).join('')}</div>
     ${(a.notes || []).filter((n) => !/tidak disebutkan/.test(n)).map((n) => `<div class="callout warn small" style="margin-top:8px">${esc(n)}</div>`).join('')}
-    ${a.subject === 'ipas' ? `<p class="small muted" style="margin:8px 0 0">Format TKAD: soal mandiri bergambar, PG 50% dan PG kompleks 50%, ${ENGINE.autoCount(a) >= 30 ? 'durasi 90 menit' : '3 menit per soal'}.${APP.engineChoice === 'ai' && AI.ready() ? ' Disusun generator lokal (mode AI untuk IPAS belum tersedia).' : ''}</p>` : ''}</div>`).join('')}
+    ${a.subject === 'ipas' ? `<p class="small muted" style="margin:8px 0 0">Format TKAD: 50% PG, 30% MCMA, 20% klasifikasi/pernyataan kompleks, ${ENGINE.autoCount(a) >= 30 ? 'durasi 90 menit' : '3 menit per soal'}.${APP.engineChoice === 'ai' && AI.ready() ? ' Disusun langsung oleh Gemini; visual berupa SVG/tabel/grafik.' : ''}</p>` : ''}</div>`).join('')}
     ${r.analyses.length > 1 ? `<p class="small muted" style="margin:4px 0 0">${r.analyses.length === 2 ? 'Dua' : 'Tiga'} mata pelajaran terdeteksi, jadi akan dibuat ${r.analyses.length === 2 ? 'dua' : 'tiga'} paket terpisah.</p>` : ''}
     ${(r.excluded || []).length ? `<details class="small"><summary class="muted" style="cursor:pointer">${r.excluded.length} baris dikecualikan (materi di luar cakupan)</summary><ul>${r.excluded.slice(0, 12).map((u) => `<li>${esc(u)}</li>`).join('')}</ul></details>` : ''}
     ${r.unknown.length ? `<details class="small"><summary class="muted" style="cursor:pointer">${r.unknown.length} baris tidak dikenali</summary><ul>${r.unknown.slice(0, 12).map((u) => `<li>${esc(u)}</li>`).join('')}</ul></details>` : ''}`;
@@ -10907,7 +11095,11 @@ ACT['kisi:engine'] = (el) => { APP.engineChoice = el.dataset.e; VIEWS.create(); 
 ACT['kisi:go'] = () => {
   const text = ($('#kisi').value || '').trim();
   if (!text) { toast('Isi kisi-kisi terlebih dahulu.', 'bad'); $('#kisi').focus(); return; }
-  const engine = AI.ready() ? APP.engineChoice : 'lokal';
+  const engine = APP.engineChoice === 'lokal' ? 'lokal' : 'ai';
+  if (engine === 'ai' && !AI.ready()) {
+    modal({ title: 'Koneksi AI belum siap', body: '<p>Generator AI belum terverifikasi. Buka Pengaturan → Koneksi AI Gemini, pasang proxy mode gratis versi 7, uji Gemini teks, dan simpan konfigurasi. Visual Matematika/IPAS dibuat sebagai SVG/tabel; tidak memerlukan model gambar berbayar.</p>' });
+    return;
+  }
   const r = ENGINE.analyze(text);
   if (engine === 'lokal' && !r.analyses.length) {
     modal({ title: 'Kisi-kisi belum dikenali', body: '<p>Generator lokal belum menemukan kompetensi Matematika, Bahasa Indonesia, atau IPAS jenjang SD/MI pada teks tersebut.</p><p>Gunakan istilah dari kisi-kisi resmi (misalnya “pecahan senilai”, “volume balok”, “gagasan utama”, “sistem pernapasan”, “perubahan wujud”), coba isi contoh, atau hubungkan AI Gemini agar kisi-kisi Matematika dan Bahasa Indonesia apa pun dapat diproses.</p>' });
@@ -10954,23 +11146,16 @@ async function runProc(P) {
   const minStep = 260;
   try {
     if (P.engine === 'ai') {
-      // IPAS selalu disusun generator lokal (gambar dari pustaka bawaan); mata pelajaran lain oleh AI.
-      const loc = ENGINE.analyze(P.text).analyses;
-      const ipas = P.ipasDone ? [] : loc.filter((a) => a.subject === 'ipas');
-      const needAI = !loc.length || loc.some((a) => a.subject !== 'ipas');
+      // Semua mapel termasuk IPAS wajib melalui AI. Generator lokal hanya berjalan
+      // pada jalur eksplisit P.engine === 'lokal' (tidak pernah menjadi fallback diam-diam).
       P.tracks = [];
-      for (const a of ipas) await localTrack(P, a, loc.length, null, minStep);
-      if (ipas.length) P.ipasDone = true;
-      if (needAI) {
-        const base = P.tracks.length;
-        P.ctrl = new AbortController();
-        const pkgs = await AI.run(P.text, P.opts, {
-          tracks: (list) => { P.tracks = P.tracks.slice(0, base).concat(list.map((x) => ({ label: x.label, subject: x.subject, subjectName: x.subjectName, steps: [] }))); renderProc(); },
-          step: (ti, si, state, detail) => { const t = P.tracks[base + ti]; if (!t) return; t.steps[si] = { state, detail }; if (state === 'done') t.sub = 0; renderProc(); },
-          sub: (ti, frac) => { const t = P.tracks[base + ti]; if (t) { t.sub = frac; renderProc(); } },
-        }, P.ctrl.signal);
-        pkgs.forEach((pkg, i) => { STORE.savePkg(pkg); P.tracks[base + i].pkgId = pkg.id; });
-      }
+      P.ctrl = new AbortController();
+      const pkgs = await AI.run(P.text, P.opts, {
+        tracks: (list) => { P.tracks = list.map((x) => ({ label: x.label, subject: x.subject, subjectName: x.subjectName, steps: [] })); renderProc(); },
+        step: (ti, si, state, detail) => { const t = P.tracks[ti]; if (!t) return; t.steps[si] = { state, detail }; if (state === 'done') t.sub = 0; renderProc(); },
+        sub: (ti, frac) => { const t = P.tracks[ti]; if (t) { t.sub = frac; renderProc(); } },
+      }, P.ctrl.signal);
+      pkgs.forEach((pkg, i) => { STORE.savePkg(pkg); P.tracks[i].pkgId = pkg.id; });
     } else {
       let analyses, avoid = null;
       if (P.variant) {
@@ -11004,9 +11189,9 @@ async function runProc(P) {
     renderProc();
   }
 }
-// Satu paket dari generator lokal (dipakai juga untuk IPAS ketika mesin AI dipilih).
+// Satu paket dari generator lokal; fungsi ini hanya dipanggil jika guru memilih mode lokal.
 async function localTrack(P, a, nTracks, avoid, minStep) {
-  const t = { label: `Paket ${a.subjectName} — ${a.jenjang.label}`, subject: a.subject, subjectName: a.subjectName, steps: [], local: P.engine === 'ai' };
+  const t = { label: `Paket ${a.subjectName} — ${a.jenjang.label}`, subject: a.subject, subjectName: a.subjectName, steps: [], local: true };
   P.tracks.push(t);
   renderProc();
   const pkg = await ENGINE.runLocal(a, { count: P.opts.count || 0, durasi: P.opts.durasi || 0, avoid, title: P.opts.title ? (nTracks > 1 ? `${P.opts.title} — ${a.subjectName}` : P.opts.title) : '', kisi: P.text }, async (si, state, detail) => {
@@ -11153,7 +11338,7 @@ ACT['doc:menu'] = (el) => {
   m.className = 'menu-list'; m.setAttribute('role', 'menu');
   m.innerHTML = [
     ['doc:dlkunci', 'download', 'Unduh kunci jawaban (.html)'], ['doc:printkunci', 'print', 'Cetak kunci & pembahasan'], ['doc:share', 'share', 'Bagikan ujian ke siswa'],
-    ['doc:variasi', 'layers', 'Buat variasi paket baru'], ['doc:revalidate', 'shield', 'Jalankan ulang validasi'], ['doc:export', 'download', 'Ekspor paket (.json)'], ['doc:del', 'trash', 'Hapus naskah'],
+    ['doc:variasi', 'layers', 'Buat variasi paket baru'], ['doc:revalidate', 'shield', 'Jalankan ulang validasi'], ['doc:visualbrief', 'image', 'Unduh naskah + arahan gambar (.md)'], ['doc:export', 'download', 'Ekspor paket (.json)'], ['doc:del', 'trash', 'Hapus naskah'],
   ].map(([a, i, t]) => `<button role="menuitem" data-act="${a}" data-id="${id}">${ic(i)}${t}</button>`).join('');
   box.appendChild(m);
 };
@@ -11190,6 +11375,90 @@ ACT['doc:dlkunci'] = (el) => {
   download(`Kunci_${slug(p.title)}.html`, standaloneHTML(`Kunci & Pembahasan — ${p.title}`, docKunciHTML(p)));
   toast('Kunci jawaban diunduh. Buka file tersebut lalu cetak atau simpan sebagai PDF.', 'ok');
 };
+function packageHandoffMarkdown(p) {
+  const clean = (v) => String(v == null ? '' : v).replace(/\r/g, '').trim();
+  const pipe = (v) => clean(v).replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+  const lines = [];
+  lines.push('# ' + clean(p.title));
+  lines.push('**' + clean(p.subjectName) + ' · ' + clean(p.jenjang) + ' · ' + clean(STORE.settings().school || 'MI Husnayain Sleman') + '**');
+  lines.push('');
+  lines.push('## Instruksi untuk AI pengayaan visual');
+  lines.push('Anda bertindak sebagai editor visual naskah asesmen, bukan penulis soal. Pertahankan seluruh judul, kisi-kisi, stimulus, data, satuan, angka, pertanyaan, opsi, pernyataan, urutan nomor, kunci jawaban, dan pembahasan PERSIS seperti sumber. Jangan mengubah atau menyederhanakan isi asesmen.');
+  lines.push('Tambahkan foto/ilustrasi pendidikan yang relevan hanya pada bagian yang memiliki **Arahan gambar opsional**. Gambar hanya memperkaya konteks dan tidak boleh menjadi satu-satunya sumber informasi untuk menjawab soal. Jangan menaruh angka, label, skala, satuan, teks, atau keterangan penting di dalam foto. Pertahankan diagram SVG, tabel, dan grafik asli karena memuat data presisi. Jika gambar tidak dapat ditambahkan langsung, berikan prompt gambar per kelompok tanpa mengubah naskah.');
+  lines.push('Keluarkan naskah versi visual dengan struktur tetap sama. Pisahkan kunci dan pembahasan sebagai bagian guru; jangan sertakan bagian tersebut pada salinan siswa.');
+  lines.push('');
+  lines.push('## Naskah soal');
+  lines.push('**Mata pelajaran:** ' + clean(p.subjectName));
+  lines.push('**Jenjang:** ' + clean(p.jenjang));
+  lines.push('**Jumlah soal:** ' + (p.groups || []).reduce((n, g) => n + (g.questions || []).length, 0));
+  lines.push('');
+  let no = 0;
+  (p.groups || []).forEach((g, gi) => {
+    const st = g.stimulus || {};
+    lines.push('### Stimulus ' + (gi + 1) + (st.title ? ' — ' + clean(st.title) : ''));
+    if (st.kind) lines.push('*Jenis: ' + clean(st.kind) + '*');
+    lines.push('');
+    if (st.text) lines.push(clean(st.text));
+    if (st.imageBrief) {
+      lines.push('');
+      lines.push('**Arahan gambar opsional untuk aplikasi lain:** ' + clean(st.imageBrief));
+    }
+    (st.visuals || []).forEach((v, vi) => {
+      lines.push('');
+      if (v.type === 'svg') {
+        lines.push('**Diagram SVG ' + (vi + 1) + (v.caption ? ' — ' + clean(v.caption) : '') + '**');
+        lines.push('```svg'); lines.push(v.svg || ''); lines.push('```');
+      } else if (v.type === 'table') {
+        lines.push('**' + clean(v.caption || 'Tabel') + '**');
+        if (v.headers && v.headers.length) { lines.push('| ' + v.headers.map(pipe).join(' | ') + ' |'); lines.push('| ' + v.headers.map(() => '---').join(' | ') + ' |'); }
+        (v.rows || []).forEach((r) => lines.push('| ' + r.map(pipe).join(' | ') + ' |'));
+      } else if (['bar', 'line', 'pie', 'picto'].includes(v.type)) {
+        lines.push('**Visual data: ' + clean(v.title || v.type) + '**');
+        lines.push('```json'); lines.push(JSON.stringify(v, null, 2)); lines.push('```');
+      }
+    });
+    lines.push('');
+    (g.questions || []).forEach((q) => {
+      no++;
+      const typeNames = { pg: 'Pilihan ganda', pgk: 'Pilihan ganda kompleks', bs: 'Benar/Salah', ss: 'Sesuai/Tidak Sesuai', mtm: 'Mendukung/Tidak Mendukung', kat: 'Klasifikasi' };
+      lines.push('**' + no + '. ' + clean(q.text) + '**');
+      lines.push('*Bentuk soal: ' + clean(typeNames[q.type] || q.type) + '*');
+      if (q.options) q.options.forEach((o, oi) => {
+        lines.push(String.fromCharCode(65 + oi) + '. ' + clean(o.text || o.alt || (o.svg || o.table ? '[visual opsi — lihat rincian di bawah]' : '[opsi]')));
+        if (o.svg) { lines.push('```svg'); lines.push(o.svg); lines.push('```'); }
+        if (o.table) {
+          lines.push('| ' + (o.table.headers || []).map(pipe).join(' | ') + ' |');
+          lines.push('| ' + (o.table.headers || []).map(() => '---').join(' | ') + ' |');
+          (o.table.rows || []).forEach((r) => lines.push('| ' + r.map(pipe).join(' | ') + ' |'));
+        }
+      });
+      if (q.statements) {
+        lines.push('**Label klasifikasi:** ' + (q.labels || []).map(clean).join(' / '));
+        q.statements.forEach((stt, si) => lines.push((si + 1) + ') ' + clean(stt.text)));
+      }
+      lines.push('');
+    });
+  });
+  lines.push('---');
+  lines.push('## KHUSUS GURU — Kunci dan pembahasan (jangan tampilkan pada salinan siswa)');
+  let keyNo = 0;
+  (p.groups || []).forEach((g) => (g.questions || []).forEach((q) => {
+    keyNo++;
+    const key = q.type === 'pgk' ? (q.key || []).join(', ') : q.type === 'pg' ? (q.key || '-') : (q.statements || []).map((x, i) => (i + 1) + '. ' + (q.labels || [])[x.key]).join('; ');
+    lines.push('**Nomor ' + keyNo + ' — Kunci: ' + clean(key) + '**');
+    lines.push(clean(q.explain || 'Pembahasan belum diisi.'));
+    lines.push('');
+  }));
+  lines.push('---');
+  lines.push('*Ekspor TKA GURU. Arahan gambar bersifat opsional; visual presisi pada SVG/tabel tidak boleh diubah.*');
+  return lines.join('\n');
+}
+ACT['doc:visualbrief'] = (el) => {
+  const p = STORE.getPkg(el.dataset.id);
+  download(`Naskah_${slug(p.title)}_Arahan_Gambar.md`, packageHandoffMarkdown(p), 'text/markdown;charset=utf-8');
+  toast('Naskah dan arahan gambar berhasil diunduh (.md). Gunakan file ini pada Gemini Notes atau aplikasi pengayaan visual lain; minta AI hanya menambahkan gambar tanpa mengubah soal dan kunci.', 'ok');
+};
+
 ACT['doc:export'] = (el) => {
   const p = STORE.getPkg(el.dataset.id);
   download(`Paket_${slug(p.title)}.json`, JSON.stringify(p), 'application/json');
@@ -11319,10 +11588,12 @@ function visEditor(v, gi, vi) {
       <div class="row" style="margin-top:6px"><button class="btn btn-sm" data-act="ed:rowadd" data-p="${P}">${ic('plus')}Baris</button><button class="btn btn-sm" data-act="ed:coladd" data-p="${P}">${ic('plus')}Kolom</button><button class="btn btn-sm" data-act="ed:coldel" data-p="${P}">Hapus kolom terakhir</button></div>`;
   } else if (['bar', 'line', 'pie', 'picto'].includes(v.type)) {
     ctl = `<div class="grid-ed"><table><tr><td><b>Label</b></td>${(v.labels || []).map((l, i) => `<td><input value="${esc(l)}" data-in="ed:arr" data-p="${P}.labels" data-i="${i}"></td>`).join('')}</tr><tr><td><b>Nilai</b></td>${(v.values || []).map((x, i) => `<td><input type="number" value="${esc(x)}" data-in="ed:arr" data-p="${P}.values" data-i="${i}" data-num="1"></td>`).join('')}</tr></table></div>`;
+  } else if (v.type === 'image') {
+    ctl = `<p class="small muted">Gambar ini dibuat oleh ${esc(v.aiModel || 'model gambar Gemini')}. Gambar tertanam di paket dan ikut dibawa saat guru mengunduh file ujian siswa. Untuk menggantinya, buat ulang stimulus/kelompok dengan AI.</p>`;
   } else {
     ctl = `<details><summary class="small" style="cursor:pointer">Ganti dengan kode SVG</summary><textarea class="input" rows="5" data-in="ed:svgcode" data-p="${P}" spellcheck="false" placeholder="&lt;svg ...&gt;...&lt;/svg&gt;">${esc(v.svg || '')}</textarea><p class="small muted">Kode SVG dibersihkan otomatis dari skrip demi keamanan.</p></details>`;
   }
-  return `<div class="vis-ed"><div class="row" style="margin-bottom:6px"><b class="small">${v.type === 'table' ? 'Tabel' : v.type === 'svg' ? 'Ilustrasi' : 'Diagram'} ${vi + 1}</b><span class="spacer"></span><button class="btn btn-sm btn-danger" data-act="ed:visdel" data-g="${gi}" data-v="${vi}">${ic('trash')}Hapus</button></div>
+  return `<div class="vis-ed"><div class="row" style="margin-bottom:6px"><b class="small">${v.type === 'table' ? 'Tabel' : v.type === 'image' ? 'Gambar AI' : v.type === 'svg' ? 'Ilustrasi' : 'Diagram'} ${vi + 1}</b><span class="spacer"></span><button class="btn btn-sm btn-danger" data-act="ed:visdel" data-g="${gi}" data-v="${vi}">${ic('trash')}Hapus</button></div>
     <div class="prev">${visHTML(v)}</div>${ctl}
     <div class="field" style="margin:8px 0 0"><label class="small">Keterangan gambar</label><input class="input" value="${esc(v.caption || '')}" data-in="ed:f" data-p="${P}.caption"></div></div>`;
 }
@@ -11834,9 +12105,10 @@ VIEWS.studentLink = (payload) => {
 VIEWS.settings = () => {
   const s = STORE.settings();
   const ai = s.ai || {};
-  const on = ai.url && ai.verifiedAt;
+  const on = AI.ready();
+  const outdated = !!(ai.url && (+ai.proxyV || 0) < 7);
   setView(`<div class="wrap" style="max-width:980px">
-    <div class="page-head"><div><h1>Pengaturan</h1><p>Data tersimpan di browser perangkat ini (localStorage). Gunakan ekspor untuk memindahkan naskah ke perangkat lain.</p></div></div>
+    <div class="page-head"><div><h1>Pengaturan</h1><p>Data naskah dan pengaturan tersimpan di browser perangkat ini (localStorage). Gunakan ekspor untuk memindahkan naskah ke perangkat lain.</p></div></div>
     <section class="panel"><h2 style="font-size:17px;color:var(--ink-900)">Profil guru</h2>
       <div class="grid-2" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div class="field"><label for="sName">Nama guru</label><input id="sName" class="input" value="${esc(s.name)}" placeholder="Untuk sambutan di beranda"></div>
@@ -11847,31 +12119,37 @@ VIEWS.settings = () => {
       <button class="btn btn-primary" data-act="set:save">${ic('check')}Simpan profil</button>
     </section>
 
-    <section class="panel"><div class="row"><h2 style="font-size:17px;color:var(--ink-900);margin:0">Koneksi AI Gemini</h2><span class="spacer"></span><span class="chip ${on ? 'ok' : 'gray'}">${on ? 'Terhubung' + (ai.model ? ' • ' + esc(ai.model) : '') : 'Belum terhubung'}</span></div>
-      <p class="small muted" style="margin-top:8px">Tanpa AI, aplikasi tetap berjalan penuh memakai generator lokal (template Matematika, bank bacaan Bahasa Indonesia, dan bank soal bergambar IPAS bawaan). AI diperlukan untuk menulis stimulus dan soal Matematika atau Bahasa Indonesia yang benar-benar baru dari kisi-kisi apa pun. Naskah IPAS saat ini selalu disusun generator lokal.</p>
-      <div class="callout" style="margin-bottom:14px">${ic('shield')} <b>Keamanan kunci API.</b> Kunci API Gemini tidak pernah dimasukkan ke aplikasi ini. Kunci disimpan di proxy milik Anda (Google Apps Script atau Cloudflare Worker); aplikasi hanya menyimpan URL proxy dan token akses opsional di browser ini.</div>
+    <section class="panel"><div class="row"><h2 style="font-size:17px;color:var(--ink-900);margin:0">Koneksi AI Gemini — Mode Gratis</h2><span class="spacer"></span><span class="chip ${on ? 'ok' : 'gray'}">${on ? 'AI teks & proxy gratis siap' + (ai.model ? ' • ' + esc(ai.model) : '') : outdated ? 'Proxy lama — perlu diperbarui' : 'Belum terhubung'}</span></div>
+      <div class="callout ok" style="margin:12px 0"><b>Mode gratis aktif sebagai standar.</b> Gemini menangani analisis kisi-kisi, penyusunan stimulus, soal, kunci, pembahasan, dan validasi. Visual dibuat sebagai SVG, diagram, tabel, grafik, serta piktogram dari data yang dihasilkan AI. Aplikasi tidak memanggil Nano Banana, API gambar, atau model berbayar.</div>
+      <p class="small muted">Model utama: <code>gemini-3.8-flash</code>. Bila model utama terkena batas kuota atau tidak tersedia, proxy mencoba model teks gratis yang diizinkan: <code>gemini-3.7-flash</code> dan <code>gemini-3.6-flash</code>. Batas gratis tetap mengikuti kuota akun Google AI Studio; jika seluruh model mencapai batas, proses perlu dilanjutkan setelah kuota pulih.</p>
+      <div class="callout" style="margin-bottom:14px">${ic('shield')} <b>Keamanan kunci API.</b> Kunci API Gemini disimpan di Script Properties pada Google Apps Script / secret Cloudflare Worker, bukan di file HTML atau browser. Untuk mode ini, tidak perlu mengaktifkan billing model gambar. Hindari memasukkan nama lengkap, NISN, kata sandi, atau data pribadi siswa ke dalam prompt AI.</div>
       <div class="grid-2" style="grid-template-columns:2fr 1fr;gap:12px">
         <div class="field"><label for="aiUrl">URL proxy</label><input id="aiUrl" class="input" value="${esc(ai.url)}" placeholder="https://script.google.com/macros/s/…/exec" inputmode="url" autocomplete="off"></div>
         <div class="field"><label for="aiTok">Token akses (opsional)</label><input id="aiTok" class="input" type="password" value="${esc(ai.token)}" placeholder="Sama dengan ACCESS_TOKEN di proxy" autocomplete="off"></div>
       </div>
-      <div class="row"><button class="btn btn-primary" data-act="ai:test">${ic('spark')}Uji & simpan koneksi</button>${ai.url ? `<button class="btn btn-danger" data-act="ai:off">${ic('x')}Putuskan</button>` : ''}<span id="aiMsg" class="small"></span></div>
-      ${on && (+ai.proxyV || 1) < 3 ? `<div class="callout warn" style="margin-top:14px"><b>Perbarui kode proxy ke versi 3.</b> Kode proxy yang terpasang masih versi ${+ai.proxyV || 1}. Versi 3 otomatis mencoba lagi saat server Gemini sibuk, dan berpindah ke model cadangan bila model utama sibuk atau kuota hariannya habis. Caranya: klik “Salin kode” di bawah, tempel menggantikan seluruh kode lama di Apps Script lalu simpan, kemudian <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b>. URL /exec tetap sama. Setelah itu klik “Uji & simpan koneksi” sekali lagi.</div>` : ''}
-      ${on && (+ai.proxyV || 1) >= 3 ? `<p class="small muted" style="margin:10px 0 0">Proxy versi ${+ai.proxyV}. Model utama: <b>${esc(ai.model || '-')}</b>${ai.fallback ? ` • model cadangan (saat sibuk atau kuota harian habis): <b>${esc(ai.fallback)}</b>` : ' • tanpa model cadangan'}.</p>` : ''}
-      <details style="margin-top:16px"><summary style="cursor:pointer;font-weight:650;color:var(--ink-900)">Cara membuat proxy dengan Google Apps Script (gratis, sekitar 5 menit)</summary>
+      <div class="row">
+        <button class="btn btn-primary" data-act="ai:test">${ic('spark')}Uji Gemini Teks & Simpan</button>
+        ${ai.url ? `<button class="btn btn-danger" data-act="ai:off">${ic('x')}Putuskan</button>` : ''}
+        <span id="aiMsg" class="small"></span>
+      </div>
+      ${outdated ? `<div class="callout warn" style="margin-top:14px"><b>Perbarui proxy ke versi 7 (mode gratis).</b> Proxy lama masih versi ${+ai.proxyV || 1}. Salin kode Apps Script di bawah, ganti seluruh isi <code>Code.gs</code>, simpan, lalu <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b>. URL <code>/exec</code> tetap sama. Setelah itu klik Uji Gemini Teks & Simpan.</div>` : ''}
+      ${on ? `<div class="callout ok" style="margin-top:12px"><b>Proxy gratis versi ${+ai.proxyV} terverifikasi.</b><br>Model aktif: <b>${esc(ai.model || 'Gemini')}</b>${ai.fallback ? ` • model cadangan: ${esc(ai.fallback)}` : ''}<br>Mode visual: <b>SVG + tabel + grafik</b><br>API gambar: <b>tidak dipanggil</b></div>` : ''}
+      <details style="margin-top:16px" open><summary style="cursor:pointer;font-weight:650;color:var(--ink-900)">Panduan memasang proxy gratis dengan Google Apps Script</summary>
         <ol class="steps-guide" style="margin-top:10px">
-          <li>Buat kunci API di <b>Google AI Studio</b> (aistudio.google.com, menu “Get API key”).</li>
-          <li>Buka <b>script.google.com</b>, buat proyek baru, hapus isi <code>Code.gs</code>, lalu tempel kode di bawah ini.</li>
-          <li>Buka <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> berisi kunci API. Bila ingin, tambahkan <code>ACCESS_TOKEN</code> (kata sandi bebas), <code>GEMINI_MODEL</code> (model utama), dan <code>GEMINI_FALLBACK_MODEL</code> (model cadangan saat server sibuk atau kuota harian habis; bawaannya <code>gemini-flash-lite-latest</code>).</li>
-          <li>Klik <b>Deploy → New deployment → Web app</b>. Pilih <i>Execute as: Me</i> dan <i>Who has access: Anyone</i>, lalu izinkan aksesnya.</li>
-          <li>Salin URL web app (berakhiran <code>/exec</code>) ke kolom URL proxy di atas, isi token bila dibuat, lalu klik “Uji & simpan koneksi”.</li>
-          <li>Bila kode proxy diperbarui di kemudian hari, pilih <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b> agar URL tetap sama.</li>
+          <li>Buka <b>Google AI Studio</b> dan buat API Key. Pastikan akun/model memiliki kuota free tier.</li>
+          <li>Buka <b>script.google.com</b>, buat proyek Apps Script, lalu ganti seluruh isi <code>Code.gs</code> dengan kode proxy versi 7 di bawah.</li>
+          <li>Di <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> dengan API Key Anda. Opsional: tambahkan <code>ACCESS_TOKEN</code> dan isi token yang sama pada kolom Token akses di atas.</li>
+          <li>Model dibatasi otomatis pada daftar gratis: <code>gemini-3.8-flash</code>, <code>gemini-3.7-flash</code>, dan <code>gemini-3.6-flash</code>. Properti model lama yang menunjuk ke model di luar allowlist akan diabaikan dan tidak dipanggil.</li>
+          <li>Klik <b>Deploy → New deployment → Web app</b>. Pilih <i>Execute as: Me</i> dan <i>Who has access: Anyone</i>, lalu izinkan akses.</li>
+          <li>Salin URL web app yang berakhiran <code>/exec</code> ke kolom URL proxy, isi token bila dibuat, lalu klik <b>Uji Gemini Teks & Simpan</b>.</li>
+          <li>Jika memperbarui kode di kemudian hari, gunakan <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b>. URL /exec tetap sama.</li>
         </ol>
-        <div class="row" style="margin-bottom:6px"><b class="small">Kode Apps Script</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="gas">${ic('copy')}Salin kode</button></div>
+        <div class="row" style="margin-bottom:6px"><b class="small">Kode Apps Script — teks gratis saja</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="gas">${ic('copy')}Salin kode</button></div>
         <pre class="code">${esc(AI.PROXY_GAS)}</pre>
-        <details style="margin-top:12px"><summary class="small" style="cursor:pointer">Alternatif: Cloudflare Worker</summary>
+        <details style="margin-top:12px"><summary class="small" style="cursor:pointer">Alternatif: Cloudflare Worker — teks gratis saja</summary>
           <div class="row" style="margin:8px 0 6px"><b class="small">Kode Worker</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="cf">${ic('copy')}Salin kode</button></div>
-          <pre class="code">${esc(AI.PROXY_CF)}</pre></details>
-        <p class="small muted">Model bawaan proxy adalah <code>gemini-flash-latest</code>. Nama model dapat diganti melalui Script Property <code>GEMINI_MODEL</code> sesuai daftar model di Google AI Studio. Penggunaan Gemini API mengikuti kuota dan ketentuan akun Google Anda.</p>
+          <pre class="code">${esc(AI.PROXY_CF)}</pre>
+        </details>
       </details>
     </section>
 
@@ -11888,11 +12166,12 @@ VIEWS.settings = () => {
     </section>
 
     <section class="panel"><h2 style="font-size:17px;color:var(--ink-900)">Tentang TKA GURU</h2>
-      <p class="small">TKA GURU menyusun naskah latihan Tes Kemampuan Akademik (TKA) Matematika dan Bahasa Indonesia serta TKAD IPAS (muatan sains) dari kisi-kisi, lengkap dengan mode naskah A4, mode ujian interaktif, penilaian per tipe soal, hasil, dan pembahasan.</p>
+      <p class="small">TKA GURU menyusun latihan TKA Matematika dan Bahasa Indonesia serta TKAD IPAS dari kisi-kisi, lengkap dengan mode naskah A4, ujian interaktif, penilaian, hasil, dan pembahasan.</p>
       <ul class="small" style="padding-left:18px">
-        <li><b>Generator lokal</b> — bukan AI. Template Matematika membuat konteks dan angka acak, lalu menghitung kunci dan pengecoh dengan rumus; validasi menghitung ulang setiap kunci. Bahasa Indonesia memakai bank ${BIB.S.length} bacaan orisinal dengan ${BIB.S.reduce((n, x) => n + x.qs.length, 0)} soal. IPAS memakai ${IPA.T.length} template soal mandiri orisinal (${IPA.T.reduce((n, t) => n + t.qs.length, 0)} model soal) dengan gambar yang digambar ulang oleh aplikasi dari pustaka gambar IPA (organ, daur hidup, rantai makanan, tata surya, gerhana, dan lainnya); label, opsi, dan kuncinya dibangkitkan bersama sehingga kunci selalu sesuai gambar.</li>
-        <li><b>AI Gemini</b> — aktif setelah proxy terhubung. Stimulus dan soal ditulis AI, diperiksa ulang oleh AI, lalu divalidasi lagi oleh aplikasi.</li>
-        <li>Semua soal tetap perlu ditinjau guru sebelum dipakai.</li>
+        <li><b>AI Gemini gratis</b> — stimulus dan soal baru disusun oleh AI, diperiksa silang, lalu divalidasi oleh aplikasi.</li>
+        <li><b>Visual SVG/tabel/grafik</b> — visual presisi disusun dari data AI agar label, skala, dan angka dapat dibaca dengan benar.</li>
+        <li><b>Pengayaan gambar di aplikasi lain</b> — unduh naskah beserta arahan gambar dalam format Markdown, lalu gunakan aplikasi visual lain tanpa mengubah soal, data, opsi, atau kunci.</li>
+        <li><b>Generator lokal</b> — tersedia sebagai pilihan manual dan bukan AI. Generator tidak berjalan otomatis saat koneksi AI gagal.</li>
       </ul>
     </section>
   </div>`);
@@ -11925,17 +12204,24 @@ ACT['ai:test'] = async (el) => {
     msg.innerHTML = `<span style="color:var(--bad)">${esc(hint.msg)}</span>`;
     return;
   }
-  el.disabled = true; msg.textContent = 'Menghubungi proxy…';
+  el.disabled = true; msg.textContent = 'Menguji model teks Gemini dan memeriksa mode gratis…';
   try {
     const d = await AI.test(url, token);
-    const s = STORE.settings(); s.ai = { url, token, verifiedAt: Date.now(), model: d.model || '', fallback: d.fallback || '', proxyV: +d.version || 1 }; STORE.saveSettings(s);
-    toast('AI terhubung.', 'ok'); VIEWS.settings(); renderTopbar('/pengaturan');
+    if (+d.version < 7 || d.freeMode !== true) throw new Error('Proxy belum menggunakan mode gratis versi 7. Salin kode proxy baru, ganti seluruh Code.gs, lalu deploy New version.');
+    const s = STORE.settings();
+    s.ai = {
+      url, token, verifiedAt: Date.now(), model: d.model || 'gemini-3.8-flash',
+      fallback: d.fallback || '', proxyV: +d.version || 7,
+      freeMode: true, visualMode: 'SVG + tabel + grafik'
+    };
+    STORE.saveSettings(s);
+    toast('Gemini teks gratis terhubung dan terverifikasi.', 'ok'); VIEWS.settings(); renderTopbar('/pengaturan');
   } catch (e) {
-    const s = STORE.settings(); s.ai = { url, token, verifiedAt: 0, model: '' }; STORE.saveSettings(s);
+    const s = STORE.settings(); s.ai = { url, token, verifiedAt: 0, model: '', proxyV: 0, freeMode: false }; STORE.saveSettings(s);
     msg.innerHTML = `<span style="color:var(--bad)">Gagal: ${esc(e.message)}</span>`; renderTopbar('/pengaturan');
   } finally { el.disabled = false; }
 };
-ACT['ai:off'] = () => { const s = STORE.settings(); s.ai = { url: '', token: '', verifiedAt: 0, model: '' }; STORE.saveSettings(s); APP.engineChoice = 'lokal'; toast('Koneksi AI diputuskan.'); VIEWS.settings(); renderTopbar('/pengaturan'); };
+ACT['ai:off'] = () => { const s = STORE.settings(); s.ai = { url: '', token: '', verifiedAt: 0, model: '', fallback: '', proxyV: 0, freeMode: false, visualMode: 'SVG + tabel + grafik' }; STORE.saveSettings(s); APP.engineChoice = 'lokal'; toast('Koneksi AI diputuskan.'); VIEWS.settings(); renderTopbar('/pengaturan'); };
 ACT['ai:copy'] = async (el) => { const ok = await copyText(el.dataset.k === 'cf' ? AI.PROXY_CF : AI.PROXY_GAS); toast(ok ? 'Kode disalin.' : 'Gagal menyalin.', ok ? 'ok' : 'bad'); };
 ACT['data:export'] = () => download(`TKA_GURU_cadangan_${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(STORE.exportAll()), 'application/json');
 ACT['data:clear'] = async () => {

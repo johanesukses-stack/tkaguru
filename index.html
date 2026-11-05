@@ -6063,10 +6063,29 @@ const AI = (() => {
     if (!m || !(m[1] || m[2] || m[3])) return 0;
     return (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + Math.ceil(parseFloat(m[3] || 0));
   }
+  // Server Gemini sibuk (HTTP 5xx, “high demand”, “overloaded”): bukan masalah API key atau kuota.
+  const BUSY_RE = /high demand|overload|unavailable|try again later|\b50[0234]\b|internal error|backend error|deadline exceeded/i;
   function classify(er, data) {
     const msg = String((data && data.error) || er.message || '');
-    if (!((data && +data.status === 429) || RATE_RE.test(msg))) return er;
+    const st = +((data && data.status) || 0);
+    if (!st && /timeout|timed out|exceeded maximum execution/i.test(msg)) {
+      er.slow = true;
+      er.message = 'Permintaan ke Gemini melebihi batas waktu Apps Script (sekitar 60 detik per permintaan), biasanya karena model sedang lambat. Coba lagi, atau ganti GEMINI_MODEL ke model yang lebih cepat, misalnya gemini-flash-lite-latest.';
+      return er;
+    }
+    if (st !== 429 && !RATE_RE.test(msg) && ((st >= 500 && st < 600) || BUSY_RE.test(msg))) {
+      er.busy = true;
+      er.message = `Server Gemini sedang sibuk${st ? ` (HTTP ${st})` : ''}. Ini gangguan sementara di pihak Google, bukan masalah API key atau kuota, dan biasanya pulih dalam beberapa menit. Coba lagi nanti, atau gunakan generator lokal. Pesan Google: “${msg.slice(0, 160)}”`;
+      return er;
+    }
+    if (!(st === 429 || RATE_RE.test(msg))) return er;
     er.rate = true;
+    if (/limit:\s*0\b/i.test(msg)) {
+      const mdl = (data && data.model) || ((/model:\s*([\w.\-]+)/i.exec(msg) || [])[1]) || 'yang dipakai';
+      er.daily = true;
+      er.message = `Model ${mdl} tidak tersedia untuk API key ini pada paket gratis (kuotanya 0, bukan gangguan sementara). Ganti GEMINI_MODEL di Script Properties Apps Script ke model lain yang tersedia, misalnya gemini-flash-lite-latest, lalu klik Lanjutkan dengan AI.`;
+      return er;
+    }
     const hint = (data && data.retryDelay) || ((/retry in\s+([\dhms.\s]+?)(?:\.\s|\.?$|\n)/i.exec(msg) || [])[1]) || '';
     er.wait = secondsOf(hint);
     er.daily = er.wait > 120 || (!er.wait && DAY_RE.test(msg));
@@ -6078,12 +6097,13 @@ const AI = (() => {
     if (signal) signal.addEventListener('abort', () => { clearTimeout(t); const er = new Error('Dibatalkan'); er.name = 'AbortError'; reject(er); }, { once: true });
   });
   let lastNote = 0;
-  function noteWait(sec) {
+  function noteWait(sec, busy) {
     const now = Date.now();
     if (now - lastNote < 9000) return;
     lastNote = now;
-    try { toast(`Batas per menit Gemini tercapai. Menunggu ${sec} detik, lalu proses dilanjutkan otomatis.`); } catch (e) { /* abaikan */ }
+    try { toast(busy ? `Server Gemini sedang sibuk. Mencoba lagi otomatis dalam ${sec} detik…` : `Batas per menit Gemini tercapai. Menunggu ${sec} detik, lalu proses dilanjutkan otomatis.`); } catch (e) { /* abaikan */ }
   }
+  const BUSY_WAIT = [6, 12, 20, 30, 45];
   function parseJSON(text) {
     let t = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -6094,23 +6114,39 @@ const AI = (() => {
     }
   }
   let lastModel = '';
-  async function ask(prompt, signal, temperature = 0.7, retries = 2) {
+  const reqStat = { sent: 0, cached: 0, models: {} };
+  // ---- Cache hasil per bagian: bila proses terhenti (kuota/server sibuk), bagian yang sudah
+  // berhasil tidak diminta ulang saat guru menekan "Lanjutkan dengan AI" (kuota tidak terbuang).
+  const CACHE_KEY = 'aicache', CACHE_TTL = 36 * 3600 * 1000;
+  function hashStr(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36) + '.' + str.length.toString(36); }
+  function cacheLoad() { const c = STORE.get(CACHE_KEY, null); return c && c.items && Date.now() - c.at < CACHE_TTL ? c : { at: Date.now(), items: {} }; }
+  function cacheGet(h) { try { return cacheLoad().items[h] || null; } catch (e) { return null; } }
+  function cachePut(h, v) { try { const c = cacheLoad(); c.items[h] = v; STORE.set(CACHE_KEY, c); } catch (e) { /* penyimpanan penuh: lewati cache */ } }
+  function cacheCount() { try { return Object.keys(cacheLoad().items).length; } catch (e) { return 0; } }
+  function cacheClear() { STORE.del(CACHE_KEY); }
+
+  async function ask(prompt, signal, temperature = 0.7, retries = 2, useCache = false) {
+    const h = useCache ? hashStr(temperature + '|' + prompt) : null;
+    if (h) { const hit = cacheGet(h); if (hit) { reqStat.cached++; return hit; } }
     let lastErr, waits = 0;
     for (let k = 0; k <= retries;) {
       try {
+        reqStat.sent++;
         const d = await post({ prompt, system: SYSTEM, json: true, temperature }, signal);
-        if (d.model) lastModel = d.model;
-        return parseJSON(d.text);
+        if (d.model) { lastModel = d.model; reqStat.models[d.model] = (reqStat.models[d.model] || 0) + 1; }
+        const res = parseJSON(d.text);
+        if (h) cachePut(h, res);
+        return res;
       } catch (e) {
         if (e.name === 'AbortError') throw e;
         lastErr = e;
-        if (e.rate) {
+        if (e.rate || e.busy) {
           if (e.daily || waits >= 5) throw e;
-          const sec = Math.min(90, Math.max(5, e.wait ? e.wait + 2 : 20 + waits * 15));
-          noteWait(sec);
+          const sec = e.busy ? BUSY_WAIT[waits] : Math.min(90, Math.max(5, e.wait ? e.wait + 2 : 20 + waits * 15));
+          noteWait(sec, e.busy);
           await sleep(sec * 1000, signal);
           waits++;
-          continue; // menunggu batas per menit tidak dihitung sebagai percobaan gagal
+          continue; // menunggu (batas per menit / server sibuk) tidak dihitung sebagai percobaan gagal
         }
         k++;
       }
@@ -6230,17 +6266,6 @@ Tugas:
 4. Susun rancangan: setiap stimulus memuat 3 indikator/soal dengan bentuk soal bervariasi, jenis stimulus yang cocok (Matematika: masalah kontekstual, tabel, diagram batang/garis/lingkaran, piktogram, ilustrasi bangun datar/ruang, situasi pengukuran; Bahasa Indonesia: fabel, narasi, teks informasi, eksplanasi, surat, puisi, prosedur, infografis, tabel/diagram, teks opini), dan semua indikator terwakili secara proporsional.
 Skema JSON:
 {"paket":[{"mapel":"Matematika","jenjang":"Kelas 6 SD/MI","judul":"Latihan TKA Matematika Kelas 6 SD/MI","indikator":[{"kode":"I1","materi":"...","kompetensi":"...","level":"Pemahaman"}],"rancangan":[{"no":1,"jenis_stimulus":"...","ide":"gambaran singkat isi stimulus","kode_indikator":["I1","I2","I3"],"bentuk":["pg","pgk","bs"]}]}]}`;
-  const pStimulus = (pk, items) => `TAHAP: MEMBUAT STIMULUS
-Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
-Indikator yang diuji:
-${pk.indikator.map((x) => `- ${x.kode}: ${x.kompetensi} (${x.materi})`).join('\n')}
-Buat stimulus orisinal untuk rancangan berikut:
-${items.map((r) => `- No ${r.no}: ${r.jenis_stimulus}. Ide: ${r.ide || '-'}. Indikator: ${(r.kode_indikator || []).join(', ')}`).join('\n')}
-Ketentuan:
-- ${/indonesia/i.test(pk.mapel) ? 'Teks 120–250 kata dengan paragraf jelas (pisahkan paragraf dengan baris kosong). Puisi 2–3 bait (pisahkan baris dengan \\n). Infografis atau diagram disajikan sebagai "visual" disertai teks pengantar singkat.' : 'Konteks kehidupan sehari-hari yang akrab bagi siswa Indonesia. Semua data yang diperlukan untuk menjawab tiga soal harus ada pada stimulus. Gunakan "visual" untuk tabel, diagram, piktogram, atau gambar bangun.'}
-- Stimulus harus benar-benar diperlukan untuk menjawab soal.
-${VISUAL_SPEC}
-Skema JSON: {"stimulus":[{"no":1,"judul":"...","jenis":"...","teks":"...","visual":null}]}`;
   const pSoal = (pk, r, st) => `TAHAP: MENYUSUN SOAL
 Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
 Stimulus:
@@ -6254,6 +6279,27 @@ Aturan bentuk:
 - Soal interpretasi diagram boleh memakai opsi berbentuk {"diagram_alur":["langkah 1","langkah 2","langkah 3","langkah 4"]}.
 - "pembahasan" menjelaskan alasan kunci${/indonesia/i.test(pk.mapel) ? ' dengan menyebut bukti dari teks' : ' dengan langkah perhitungan'}; untuk bentuk tabel, bahas setiap pernyataan bernomor.
 Skema JSON: {"soal":[{"bentuk":"pg","kode_indikator":"I1","level":"Pemahaman","indikator_soal":"...","pertanyaan":"...","opsi":["...","...","...","..."],"kunci":"B","label":null,"pernyataan":null,"pembahasan":"..."}]}`;
+  const indLines = (pk, r, pad = '') => (r.kode_indikator || []).map((k, i) => { const ind = pk.indikator.find((x) => x.kode === k) || {}; return `${pad}${i + 1}. Indikator ${k}: ${ind.kompetensi || '-'}; bentuk ${(r.bentuk || [])[i] || 'pg'}; level ${ind.level || 'Penerapan'}`; }).join('\n');
+  const RULES_STIM = (pk) => (/indonesia/i.test(pk.mapel) ? 'Teks 120–250 kata dengan paragraf jelas (pisahkan paragraf dengan baris kosong). Puisi 2–3 bait (pisahkan baris dengan \\n). Infografis atau diagram disajikan sebagai "visual" disertai teks pengantar singkat.' : 'Konteks kehidupan sehari-hari yang akrab bagi siswa Indonesia. Semua data yang diperlukan untuk menjawab tiga soal harus ada pada stimulus. Gunakan "visual" untuk tabel, diagram, piktogram, atau gambar bangun.');
+  const RULES_SOAL = (pk) => `- pg: "opsi" 4 butir, "kunci" satu huruf (A–D).
+- pgk: "opsi" 4–5 butir, "kunci" daftar 2–3 huruf.
+- bs/ss/mtm/kat: "pernyataan" 3–5 butir, setiap butir punya "kunci" berupa salah satu "label". Label bawaan: bs ["Benar","Salah"], ss ["Sesuai","Tidak Sesuai"], mtm ["Mendukung","Tidak Mendukung"]; kat memakai label sendiri. Untuk mtm, tulis pendapat yang dinilai di dalam "pertanyaan".
+- Soal interpretasi diagram boleh memakai opsi berbentuk {"diagram_alur":["langkah 1","langkah 2","langkah 3","langkah 4"]}.
+- "pembahasan" menjelaskan alasan kunci${/indonesia/i.test(pk.mapel) ? ' dengan menyebut bukti dari teks' : ' dengan langkah perhitungan'}; untuk bentuk tabel, bahas setiap pernyataan bernomor.`;
+  // Satu permintaan menghasilkan beberapa kelompok sekaligus (stimulus + 3 soal) agar hemat kuota.
+  const pKelompok = (pk, items) => `TAHAP: MENYUSUN STIMULUS DAN SOAL
+Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
+Indikator yang diuji:
+${pk.indikator.map((x) => `- ${x.kode}: ${x.kompetensi} (${x.materi})`).join('\n')}
+Untuk SETIAP rancangan berikut, buat satu stimulus orisinal, lalu tepat 3 soal yang hanya dapat dijawab dengan stimulus itu (urut dari pemahaman ke penalaran):
+${items.map((r) => `- No ${r.no}: ${r.jenis_stimulus}. Ide: ${r.ide || '-'}.\n${indLines(pk, r, '   ')}`).join('\n')}
+Ketentuan stimulus:
+- ${RULES_STIM(pk)}
+- Stimulus harus benar-benar diperlukan untuk menjawab soal; antarkelompok gunakan konteks yang berbeda.
+${VISUAL_SPEC}
+Aturan bentuk soal:
+${RULES_SOAL(pk)}
+Skema JSON: {"kelompok":[{"no":1,"stimulus":{"judul":"...","jenis":"...","teks":"...","visual":null},"soal":[{"bentuk":"pg","kode_indikator":"I1","level":"Pemahaman","indikator_soal":"...","pertanyaan":"...","opsi":["...","...","...","..."],"kunci":"B","label":null,"pernyataan":null,"pembahasan":"..."}]}]}`;
   const pValidasi = (pk, groups) => `TAHAP: VALIDASI
 Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
 Periksa setiap soal: (1) sesuai indikator, (2) sesuai stimulus, (3) kalimat jelas, (4) bentuk soal tepat, (5) kunci benar (${/indonesia/i.test(pk.mapel) ? 'harus dapat dibuktikan dari teks' : 'hitung ulang setiap perhitungan'}), (6) pembahasan konsisten dengan kunci, (7) pengecoh layak, (8) tidak ada jawaban ganda, (9) informasi cukup, (10) tidak duplikat.
@@ -6270,12 +6316,14 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
   }
 
   // ---------------- Pipeline utama ----------------
+  const PER_CALL = 2; // kelompok (stimulus + 3 soal) per permintaan
   async function run(text, opts, hooks, signal) {
     const count = opts.count || 0;
+    reqStat.sent = 0; reqStat.cached = 0; reqStat.models = {};
     // 1. Analisis
     hooks.tracks([{ label: 'Menganalisis kisi-kisi dengan AI', subject: null }]);
     hooks.step(0, 0, 'run', 'Mengirim kisi-kisi ke AI…');
-    const an = await ask(pAnalisis(text, count), signal, 0.4);
+    const an = await ask(pAnalisis(text, count), signal, 0.4, 2, true);
     const paket = (an.paket || []).filter((p) => p && Array.isArray(p.rancangan) && p.rancangan.length && Array.isArray(p.indikator));
     if (!paket.length) throw new AIError('AI tidak menemukan mata pelajaran atau rancangan dari kisi-kisi.');
     const subjOf = (m) => (/indonesia/i.test(m) ? 'bi' : 'mtk');
@@ -6292,33 +6340,44 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
       pk.indikator.forEach((x) => { meta[x.kode] = { code: 'AI-' + x.kode, label: x.kompetensi || x.kode, materi: x.materi || pk.mapel, level: x.level }; });
       const used = new Set(plan.flatMap((r) => r.kode_indikator || []));
       hooks.step(ti, 1, 'done', `${plan.length} kelompok stimulus × 3 soal; ${used.size} dari ${pk.indikator.length} indikator masuk rancangan.`);
-      // 3. Stimulus (batch 5)
-      hooks.step(ti, 2, 'run', 'Meminta AI menulis stimulus…');
-      const batches = []; for (let i = 0; i < plan.length; i += 5) batches.push(plan.slice(i, i + 5));
-      let doneB = 0;
-      const stims = {};
-      await pool(batches, 2, async (b) => {
-        const res = await ask(pStimulus(pk, b), signal, 0.8);
-        (res.stimulus || []).forEach((s, k) => { const no = s.no || b[k] && b[k].no; stims[no] = normStimulus(s); });
-        doneB++; hooks.sub(ti, doneB / batches.length);
+      // 3–4. Stimulus + soal: dua kelompok per permintaan (hemat kuota API key gratis)
+      hooks.step(ti, 2, 'run', `Menulis stimulus dan soal (${Math.ceil(plan.length / PER_CALL)} permintaan, ${PER_CALL} kelompok per permintaan)…`);
+      const chunks = []; for (let i = 0; i < plan.length; i += PER_CALL) chunks.push(plan.slice(i, i + PER_CALL));
+      const stims = {}, raws = {}; const fails = [];
+      let doneC = 0;
+      const fatal = (e) => e.name === 'AbortError' || e.rate || e.busy;
+      // Mengambil hasil per kelompok; mengembalikan rancangan yang belum berhasil.
+      const take = (res, items) => {
+        const list = Array.isArray(res && res.kelompok) ? res.kelompok : [];
+        return items.filter((r, k) => {
+          const item = list.find((x) => +x.no === r.no) || (list.length === items.length ? list[k] : null);
+          if (!item) return true;
+          const st = normStimulus(item.stimulus || item);
+          if (!(st.text || st.visuals.length) || !Array.isArray(item.soal) || !item.soal.length) return true;
+          stims[r.no] = st; raws[r.no] = item.soal; return false;
+        });
+      };
+      const single = async (r) => {
+        try { if (take(await ask(pKelompok(pk, [r]), signal, 0.75, 1, true), [r]).length) fails.push(r.no); } catch (e) { if (fatal(e)) throw e; fails.push(r.no); }
+      };
+      await pool(chunks, 2, async (b) => {
+        let missing;
+        // Permintaan gabungan tidak diulang bila gagal (mis. batas waktu ±60 detik Apps Script);
+        // kelompok yang belum jadi langsung diminta satu per satu.
+        try { missing = take(await ask(pKelompok(pk, b), signal, 0.75, b.length > 1 ? 0 : 2, true), b); } catch (e) { if (fatal(e)) throw e; missing = b; }
+        for (const r of missing) { if (b.length > 1) await single(r); else fails.push(r.no); }
+        doneC++; hooks.sub(ti, doneC / chunks.length);
       }, signal);
-      const okPlan = plan.filter((r) => stims[r.no] && (stims[r.no].text || stims[r.no].visuals.length));
-      if (!okPlan.length) throw new AIError('AI gagal membuat stimulus.');
-      hooks.step(ti, 2, 'done', `${okPlan.length} stimulus dibuat: ${Object.values(stims).map((s) => s.kind.toLowerCase()).slice(0, 10).join(', ')}.`);
-      // 4. Soal (per stimulus)
-      hooks.step(ti, 3, 'run', 'Menyusun soal untuk setiap stimulus…');
-      let doneQ = 0; const fails = [];
-      const raws = await pool(okPlan, 3, async (r) => {
-        try { const res = await ask(pSoal(pk, r, stims[r.no]), signal, 0.7); doneQ++; hooks.sub(ti, doneQ / okPlan.length); return res.soal || []; } catch (e) { if (e.name === 'AbortError') throw e; fails.push(r.no); doneQ++; return null; }
-      }, signal);
-      hooks.step(ti, 3, 'done', `${raws.filter(Boolean).reduce((s, x) => s + x.length, 0)} soal tersusun${fails.length ? `; ${fails.length} kelompok gagal dan dilewati` : ''}.`);
+      const okPlan = plan.filter((r) => stims[r.no]);
+      if (!okPlan.length) throw new AIError('AI gagal membuat stimulus dan soal.');
+      hooks.step(ti, 2, 'done', `${okPlan.length} stimulus dibuat: ${okPlan.map((r) => stims[r.no].kind.toLowerCase()).slice(0, 10).join(', ')}.`);
+      hooks.step(ti, 3, 'done', `${okPlan.reduce((n, r) => n + Math.min(3, raws[r.no].length), 0)} soal tersusun${fails.length ? `; ${fails.length} kelompok gagal dan dilewati` : ''}.`);
       // 5. Kunci & normalisasi
       hooks.step(ti, 4, 'run');
       const groups = [];
-      okPlan.forEach((r, i) => {
-        if (!raws[i]) return;
+      okPlan.forEach((r) => {
         const qs = [];
-        raws[i].slice(0, 3).forEach((rq, k) => {
+        (raws[r.no] || []).slice(0, 3).forEach((rq, k) => {
           const kode = rq.kode_indikator || (r.kode_indikator || [])[k];
           const m = meta[kode] || { code: 'AI-' + (kode || 'X'), label: kode || 'Kompetensi', materi: pk.mapel };
           try { const q = normQuestion(rq, m); if ((q.options && q.options.length >= 3 && (q.type === 'pg' ? q.key : q.key.length)) || (q.statements && q.statements.length >= 2)) qs.push(q); } catch (e) { /* lewati */ }
@@ -6326,26 +6385,23 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
         if (qs.length) groups.push({ id: U.uid('g'), stimulus: stims[r.no], questions: qs, gen: { ai: true, plan: r } });
       });
       if (groups.length < Math.max(1, Math.ceil(okPlan.length / 2))) throw new AIError('Sebagian besar soal dari AI tidak dapat dibaca. Coba lagi.');
-      const nq = groups.reduce((s, g) => s + g.questions.length, 0);
+      const nq = groups.reduce((n, g) => n + g.questions.length, 0);
       hooks.step(ti, 4, 'done', `${nq} kunci jawaban dan pembahasan dipetakan ke format naskah.`);
-      // 6. Validasi silang AI + validasi lokal
-      hooks.step(ti, 5, 'run', 'AI memeriksa ulang kunci dan pembahasan…');
-      const vb = []; for (let i = 0; i < groups.length; i += 3) vb.push(groups.slice(i, i + 3).map((g, k) => ({ gi: i + k, g })));
-      let doneV = 0, fixed = 0, vErr = 0;
-      await pool(vb, 3, async (b) => {
-        try {
-          const payload = b.map(({ gi, g }) => ({ no_kelompok: gi + 1, stimulus: { judul: g.stimulus.title, teks: g.stimulus.text, visual: g.stimulus.visuals.map((v) => (v.type === 'svg' ? '[gambar]' : v)) }, soal: g.questions.map(exportQ) }));
-          const res = await ask(pValidasi(pk, payload), signal, 0.2, 1);
-          (res.hasil || []).forEach((h) => {
-            const g = groups[(h.no_kelompok || 0) - 1]; if (!g) return;
-            const qi = (h.no_soal || 0) - 1; const q = g.questions[qi]; if (!q) return;
-            if (h.status === 'diperbaiki' && h.soal) {
-              try { const nq2 = normQuestion(Object.assign({ bentuk: q.type, kode_indikator: null, level: q.level, indikator_soal: q.indikator }, h.soal), { code: q.code, label: q.submateri, materi: q.materi }); nq2.aiChecked = true; nq2.aiNote = h.catatan || ''; g.questions[qi] = nq2; fixed++; } catch (e) { /* biarkan */ }
-            } else q.aiChecked = true;
-          });
-        } catch (e) { if (e.name === 'AbortError') throw e; vErr++; }
-        doneV++; hooks.sub(ti, doneV / vb.length);
-      }, signal);
+      // 6. Validasi silang AI (satu permintaan untuk seluruh naskah) + validasi lokal
+      hooks.step(ti, 5, 'run', 'AI memeriksa ulang kunci dan pembahasan seluruh soal…');
+      let fixed = 0, vErr = 0;
+      try {
+        const payload = groups.map((g, gi) => ({ no_kelompok: gi + 1, stimulus: { judul: g.stimulus.title, teks: g.stimulus.text, visual: g.stimulus.visuals.map((v) => (v.type === 'svg' ? '[gambar]' : v)) }, soal: g.questions.map(exportQ) }));
+        const res = await ask(pValidasi(pk, payload), signal, 0.2, 1, true);
+        (res.hasil || []).forEach((hh) => {
+          const g = groups[(hh.no_kelompok || 0) - 1]; if (!g) return;
+          const qi = (hh.no_soal || 0) - 1; const q = g.questions[qi]; if (!q) return;
+          if (hh.status === 'diperbaiki' && hh.soal) {
+            try { const nq2 = normQuestion(Object.assign({ bentuk: q.type, kode_indikator: null, level: q.level, indikator_soal: q.indikator }, hh.soal), { code: q.code, label: q.submateri, materi: q.materi }); nq2.aiChecked = true; nq2.aiNote = hh.catatan || ''; g.questions[qi] = nq2; fixed++; } catch (e) { /* biarkan */ }
+          } else q.aiChecked = true;
+        });
+      } catch (e) { if (e.name === 'AbortError') throw e; vErr++; }
+      hooks.sub(ti, 1);
       const pkg = {
         id: U.uid('pkg'), v: 1, title: opts.title || pk.judul || `Latihan TKA ${pk.mapel} ${pk.jenjang}`, subject: subjOf(pk.mapel), subjectName: /indonesia/i.test(pk.mapel) ? 'Bahasa Indonesia' : 'Matematika',
         jenjang: pk.jenjang, durasi: opts.durasi || Math.max(15, nq * 2), createdAt: Date.now(), updatedAt: Date.now(), engine: 'ai', aiModel: lastModel, aiCodes: true, kisi: text,
@@ -6354,11 +6410,14 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
       cleanPackage(pkg);
       const v = ENGINE.validate(pkg, { codes: pkg.analysis.codes });
       v.fixed = fixed; pkg.validation = v;
-      hooks.step(ti, 5, 'done', `Validasi silang AI: ${fixed} soal diperbaiki${vErr ? `, ${vErr} batch tidak terperiksa` : ''}. Validasi lokal: ${v.summary.ok} lolos, ${v.summary.warn} catatan, ${v.summary.fail} gagal.`);
+      hooks.step(ti, 5, 'done', `Validasi silang AI: ${fixed} soal diperbaiki${vErr ? ' (pemeriksaan AI dilewati karena gagal; validasi lokal tetap berjalan)' : ''}. Validasi lokal: ${v.summary.ok} lolos, ${v.summary.warn} catatan, ${v.summary.fail} gagal.`);
       hooks.step(ti, 6, 'run');
       hooks.step(ti, 6, 'done', `Naskah “${pkg.title}” siap: ${nq} soal, ${groups.length} stimulus.`);
       out.push(pkg);
     }
+    cacheClear(); // proses selesai: cache bagian tidak diperlukan lagi
+    const last = out.length - 1, lp = out[last];
+    hooks.step(last, 6, 'done', `Naskah “${lp.title}” siap. Total permintaan AI: ${reqStat.sent}${reqStat.cached ? ` (+${reqStat.cached} bagian dipakai ulang dari proses sebelumnya)` : ''}${Object.keys(reqStat.models).length > 1 ? `; model: ${Object.keys(reqStat.models).join(', ')}` : ''}.`);
     return out;
   }
 
@@ -6381,11 +6440,11 @@ Soal yang diganti: ${JSON.stringify(q.text)}`;
     const inds = g.questions.map((q, i) => ({ kode: 'K' + (i + 1), kompetensi: q.submateri || q.indikator, materi: q.materi, level: q.level }));
     const pk = { mapel: pkg.subjectName, jenjang: pkg.jenjang, indikator: inds };
     const plan = { no: 1, jenis_stimulus: (g.stimulus && g.stimulus.kind) || 'stimulus', ide: 'stimulus baru yang berbeda dari sebelumnya', kode_indikator: inds.map((x) => x.kode), bentuk: g.questions.map((q) => q.type) };
-    const sres = await ask(pStimulus(pk, [plan]), null, 0.9);
-    const st = normStimulus((sres.stimulus || [])[0] || {});
+    const res = await ask(pKelompok(pk, [plan]), null, 0.85);
+    const item = (res.kelompok || [])[0] || {};
+    const st = normStimulus(item.stimulus || {});
     if (!st.text && !st.visuals.length) return { ok: false, msg: 'AI tidak mengembalikan stimulus.' };
-    const qres = await ask(pSoal(pk, plan, st), null, 0.7);
-    const qs = (qres.soal || []).slice(0, 3).map((rq, k) => { const ind = inds[k] || inds[0]; return normQuestion(rq, { code: g.questions[k] ? g.questions[k].code : 'AI-X', label: ind.kompetensi, materi: ind.materi }); });
+    const qs = (item.soal || []).slice(0, 3).map((rq, k) => { const ind = inds[k] || inds[0]; return normQuestion(rq, { code: g.questions[k] ? g.questions[k].code : 'AI-X', label: ind.kompetensi, materi: ind.materi }); });
     if (!qs.length) return { ok: false, msg: 'AI tidak mengembalikan soal.' };
     pkg.groups[gi] = { id: U.uid('g'), stimulus: cleanPackage({ groups: [{ stimulus: st, questions: [] }] }).groups[0].stimulus, questions: qs, gen: { ai: true } };
     return { ok: true, how: 'Stimulus dan soal dibuat ulang oleh AI.' };
@@ -6393,15 +6452,22 @@ Soal yang diganti: ${JSON.stringify(q.text)}`;
 
   // ---------------- Kode proxy untuk disalin guru ----------------
   const PROXY_GAS = `/**
- * Proxy TKA GURU untuk Gemini API (Google Apps Script).
+ * Proxy TKA GURU untuk Gemini API (Google Apps Script) — versi 3.
  * Kunci API disimpan di Script Properties, BUKAN di file HTML.
  * 1) Project Settings > Script Properties: GEMINI_API_KEY = (kunci dari Google AI Studio)
  *    Opsional: ACCESS_TOKEN = (kata sandi bebas, isi juga di aplikasi)
- *    Opsional: GEMINI_MODEL = gemini-flash-latest (atau model lain yang tersedia)
+ *    Opsional: GEMINI_MODEL = gemini-flash-latest (model utama)
+ *    Opsional: GEMINI_FALLBACK_MODEL = gemini-flash-lite-latest (model cadangan bila model utama
+ *              sedang sibuk atau kuota hariannya habis; boleh beberapa, dipisah koma; isi - untuk mematikan)
  * 2) Deploy > New deployment > Web app; Execute as: Me; Who has access: Anyone.
  * 3) Salin URL web app (berakhiran /exec) ke Pengaturan TKA GURU.
+ * Memperbarui kode: Deploy > Manage deployments > ikon pensil > Version: New version > Deploy
+ * (URL /exec tetap sama).
  */
+var PROXY_VERSION = 3;
 var DEFAULT_MODEL = 'gemini-flash-latest';
+var DEFAULT_FALLBACK = 'gemini-flash-lite-latest';
+var BUSY = [500, 502, 503, 504];
 
 function doPost(e) {
   try {
@@ -6412,70 +6478,123 @@ function doPost(e) {
     var key = props.getProperty('GEMINI_API_KEY');
     if (!key) return out_({ ok: false, error: 'GEMINI_API_KEY belum diisi di Script Properties.' });
     var model = props.getProperty('GEMINI_MODEL') || DEFAULT_MODEL;
-    if (body.ping) return out_({ ok: true, text: 'pong', model: model });
+    var fb = String(props.getProperty('GEMINI_FALLBACK_MODEL') || DEFAULT_FALLBACK).trim();
+    var fallbacks = fb === '-' ? [] : fb.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x && x !== model; });
+    if (body.ping) return out_({ ok: true, text: 'pong', model: model, fallback: fallbacks.join(', '), version: PROXY_VERSION });
     var payload = {
       contents: [{ role: 'user', parts: [{ text: String(body.prompt || '') }] }],
       generationConfig: { temperature: typeof body.temperature === 'number' ? body.temperature : 0.7, responseMimeType: body.json ? 'application/json' : 'text/plain' }
     };
     if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
-    var res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-      method: 'post', contentType: 'application/json', payload: JSON.stringify(payload),
-      headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
-    });
-    var data = JSON.parse(res.getContentText() || '{}');
-    if (res.getResponseCode() !== 200) {
-      var ri = ((data.error && data.error.details) || []).filter(function (d) { return String(d['@type'] || '').indexOf('RetryInfo') > -1; })[0];
-      return out_({ ok: false, status: res.getResponseCode(), retryDelay: ri ? ri.retryDelay : '', error: (data.error && data.error.message) || ('HTTP ' + res.getResponseCode()) });
+    // Setiap model dicoba; server sibuk (5xx) diulang sekali. Kuota per menit (429 singkat) dikembalikan
+    // ke aplikasi agar aplikasi menunggu; kuota harian habis / model tidak tersedia -> pindah ke model cadangan.
+    var models = [model].concat(fallbacks);
+    var r = null, used = model, data = {}, retry = '';
+    for (var i = 0; i < models.length; i++) {
+      used = models[i];
+      for (var t = 0; t < 2; t++) {
+        if (t > 0) Utilities.sleep(2000);
+        r = gemini_(used, payload, key);
+        if (BUSY.indexOf(r.code) < 0) break;
+      }
+      data = r.data;
+      if (r.code === 200) break;
+      retry = retryOf_(data);
+      if (r.code === 429 && !longQuota_(data, retry)) break;
+      if (r.code !== 429 && BUSY.indexOf(r.code) < 0) break;
+      if (i + 1 < models.length) Utilities.sleep(500);
+    }
+    if (r.code !== 200) {
+      return out_({ ok: false, status: r.code, model: used, retryDelay: retry, error: (data.error && data.error.message) || ('HTTP ' + r.code) });
     }
     var parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
     var text = parts.filter(function (p) { return !p.thought; }).map(function (p) { return p.text || ''; }).join('');
-    return out_({ ok: true, text: text, model: model });
+    return out_({ ok: true, text: text, model: used, version: PROXY_VERSION });
   } catch (err) {
     return out_({ ok: false, error: String(err) });
   }
 }
 
-function doGet() { return out_({ ok: true, info: 'Proxy TKA GURU aktif. Gunakan metode POST.' }); }
+function retryOf_(data) {
+  var ri = ((data.error && data.error.details) || []).filter(function (d) { return String(d['@type'] || '').indexOf('RetryInfo') > -1; })[0];
+  return ri ? String(ri.retryDelay || '') : '';
+}
+
+function longQuota_(data, retry) {
+  var msg = String((data.error && data.error.message) || '');
+  var sec = parseFloat(retry) || 0;
+  return /limit:\\s*0\\b/i.test(msg) || /per.?day|daily/i.test(msg) || sec > 60;
+}
+
+function gemini_(model, payload, key) {
+  var res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify(payload),
+    headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
+  });
+  var data = {};
+  try { data = JSON.parse(res.getContentText() || '{}'); } catch (x) { data = { error: { message: 'Respons Gemini tidak dapat dibaca (HTTP ' + res.getResponseCode() + ').' } }; }
+  return { code: res.getResponseCode(), data: data };
+}
+
+function doGet() { return out_({ ok: true, info: 'Proxy TKA GURU aktif. Gunakan metode POST.', version: PROXY_VERSION }); }
 
 function out_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }`;
-  const PROXY_CF = `// Proxy TKA GURU untuk Gemini API (Cloudflare Worker).
+  const PROXY_CF = `// Proxy TKA GURU untuk Gemini API (Cloudflare Worker) — versi 3.
 // Simpan kunci sebagai secret: npx wrangler secret put GEMINI_API_KEY
-// Opsional: ACCESS_TOKEN dan GEMINI_MODEL sebagai variabel lingkungan.
+// Opsional: ACCESS_TOKEN, GEMINI_MODEL, dan GEMINI_FALLBACK_MODEL (dipisah koma; "-" untuk mematikan).
+const PROXY_VERSION = 3;
+const BUSY = [500, 502, 503, 504];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export default {
   async fetch(request, env) {
     const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
     const json = (o) => new Response(JSON.stringify(o), { headers: { ...cors, 'Content-Type': 'application/json' } });
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    if (request.method !== 'POST') return json({ ok: true, info: 'Proxy TKA GURU aktif.' });
+    if (request.method !== 'POST') return json({ ok: true, info: 'Proxy TKA GURU aktif.', version: PROXY_VERSION });
     try {
       const body = await request.json();
       if (env.ACCESS_TOKEN && body.token !== env.ACCESS_TOKEN) return json({ ok: false, error: 'Token akses tidak cocok.' });
       const model = env.GEMINI_MODEL || 'gemini-flash-latest';
-      if (body.ping) return json({ ok: true, text: 'pong', model });
+      const fb = String(env.GEMINI_FALLBACK_MODEL || 'gemini-flash-lite-latest').trim();
+      const fallbacks = fb === '-' ? [] : fb.split(',').map((x) => x.trim()).filter((x) => x && x !== model);
+      if (body.ping) return json({ ok: true, text: 'pong', model, fallback: fallbacks.join(', '), version: PROXY_VERSION });
       const payload = {
         contents: [{ role: 'user', parts: [{ text: String(body.prompt || '') }] }],
         generationConfig: { temperature: typeof body.temperature === 'number' ? body.temperature : 0.7, responseMimeType: body.json ? 'application/json' : 'text/plain' },
       };
       if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
-      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(payload),
-      });
-      const data = await r.json();
-      if (!r.ok) {
-        const ri = ((data.error && data.error.details) || []).find((d) => String(d['@type'] || '').includes('RetryInfo'));
-        return json({ ok: false, status: r.status, retryDelay: ri ? ri.retryDelay : '', error: (data.error && data.error.message) || 'HTTP ' + r.status });
+      const models = [model, ...fallbacks];
+      const retryOf = (d) => { const ri = ((d.error && d.error.details) || []).find((x) => String(x['@type'] || '').includes('RetryInfo')); return ri ? String(ri.retryDelay || '') : ''; };
+      const longQuota = (d, retry) => { const msg = String((d.error && d.error.message) || ''); return /limit:\\s*0\\b/i.test(msg) || /per.?day|daily/i.test(msg) || (parseFloat(retry) || 0) > 60; };
+      let r, data = {}, used = model, retry = '';
+      for (let i = 0; i < models.length; i++) {
+        used = models[i];
+        for (let t = 0; t < 2; t++) {
+          if (t > 0) await sleep(2000);
+          r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(used) + ':generateContent', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(payload),
+          });
+          data = await r.json().catch(() => ({ error: { message: 'Respons Gemini tidak dapat dibaca (HTTP ' + r.status + ').' } }));
+          if (!BUSY.includes(r.status)) break;
+        }
+        if (r.ok) break;
+        retry = retryOf(data);
+        if (r.status === 429 && !longQuota(data, retry)) break;
+        if (r.status !== 429 && !BUSY.includes(r.status)) break;
+        if (i + 1 < models.length) await sleep(500);
       }
+      if (!r.ok) return json({ ok: false, status: r.status, model: used, retryDelay: retry, error: (data.error && data.error.message) || 'HTTP ' + r.status });
       const parts = data.candidates?.[0]?.content?.parts || [];
-      return json({ ok: true, text: parts.filter((p) => !p.thought).map((p) => p.text || '').join(''), model });
+      return json({ ok: true, text: parts.filter((p) => !p.thought).map((p) => p.text || '').join(''), model: used, version: PROXY_VERSION });
     } catch (e) {
       return json({ ok: false, error: String(e) });
     }
   },
 };`;
 
-  return { ready, test, run, regenQuestion, regenGroup, normQuestion, normStimulus, normVisual, parseJSON, PROXY_GAS, PROXY_CF, AIError, SYSTEM };
+  return { ready, test, run, regenQuestion, regenGroup, normQuestion, normStimulus, normVisual, parseJSON, PROXY_GAS, PROXY_CF, AIError, SYSTEM, reqStat, cacheCount, cacheClear, PER_CALL };
 })();
 
 /* ===== 80_ui_core.js ===== */
@@ -6929,7 +7048,7 @@ VIEWS.create = () => {
           ${aiOn ? `<div class="seg" role="group" aria-label="Pilih mesin">
               <button data-act="kisi:engine" data-e="ai" class="${APP.engineChoice === 'ai' ? 'on' : ''}">${ic('spark')} AI Gemini</button>
               <button data-act="kisi:engine" data-e="lokal" class="${APP.engineChoice === 'lokal' ? 'on' : ''}">Generator lokal</button></div>
-              <p class="small muted" style="margin:10px 0 0">${APP.engineChoice === 'ai' ? 'AI menulis stimulus dan soal baru dari kisi-kisi, lalu memeriksa ulang kunci jawaban. Prosesnya memerlukan internet, sekitar 1–4 menit.' : 'Generator lokal bekerja tanpa internet memakai template soal Matematika dan bank bacaan Bahasa Indonesia bawaan. Prosesnya beberapa detik.'}</p>`
+              <p class="small muted" style="margin:10px 0 0">${APP.engineChoice === 'ai' ? 'AI menulis stimulus dan soal baru dari kisi-kisi, lalu memeriksa ulang kunci jawaban. Mode hemat kuota: sekitar 7 permintaan AI untuk satu mata pelajaran (13 untuk dua), cukup untuk API key gratis. Prosesnya memerlukan internet, sekitar 2–6 menit.' : 'Generator lokal bekerja tanpa internet memakai template soal Matematika dan bank bacaan Bahasa Indonesia bawaan. Prosesnya beberapa detik.'}</p>`
             : `<div class="engine-box"><b>Generator lokal</b> — bekerja tanpa internet memakai template soal Matematika (angka dan konteks dibuat acak, lalu dihitung ulang) dan bank bacaan Bahasa Indonesia bawaan.<div style="margin-top:8px">AI belum terhubung. Untuk stimulus yang benar-benar baru dari kisi-kisi apa pun, <a href="#/pengaturan">hubungkan AI Gemini melalui proxy</a>.</div></div>`}
           <details class="adv" style="margin-top:14px" ${o.count !== 'auto' || o.durasi || o.title ? 'open' : ''}>
             <summary>Opsi tambahan (boleh dilewati)</summary>
@@ -7017,7 +7136,7 @@ function renderProc() {
         ${t.pkgId ? `<div class="row" style="margin-top:14px"><a class="btn btn-primary" href="#/naskah/${t.pkgId}">${ic('eye')}Lihat naskah</a><a class="btn" href="#/ujian/${t.pkgId}">${ic('play')}Mode ujian</a><a class="btn" href="#/edit/${t.pkgId}">${ic('edit')}Edit</a></div>` : ''}
         ${t.error ? `<div class="callout warn" style="margin-top:12px">${esc(t.error)}</div>` : ''}</section>`;
     }).join('') : `<section class="proc-card"><ol class="steps"><li class="step run"><div class="dot">1</div><div><div class="st-t">Menganalisis kisi-kisi</div><div class="st-d">Menyiapkan…</div></div></li></ol></section>`}
-    ${err ? `<div class="callout warn"><b>Penyebab:</b> ${esc(P.error || 'Tidak diketahui')}</div><div class="row" style="margin-top:14px"><a class="btn" href="#/buat">${ic('left')}Kembali ke kisi-kisi</a>${P.engine === 'ai' ? `<button class="btn btn-primary" data-act="proc:local">Gunakan generator lokal</button><button class="btn" data-act="proc:retry">${ic('refresh')}Coba lagi dengan AI</button>` : ''}</div>` : ''}
+    ${err ? `<div class="callout warn"><b>Penyebab:</b> ${esc(P.error || 'Tidak diketahui')}</div><div class="row" style="margin-top:14px"><a class="btn" href="#/buat">${ic('left')}Kembali ke kisi-kisi</a>${P.engine === 'ai' ? `<button class="btn btn-primary" data-act="proc:local">Gunakan generator lokal</button><button class="btn" data-act="proc:retry">${ic('refresh')}Lanjutkan dengan AI</button>` : ''}</div>${P.engine === 'ai' ? `<p class="small muted" style="margin:10px 0 0">${AI.cacheCount() ? `${AI.cacheCount()} bagian yang sudah berhasil tersimpan dan tidak akan diminta ulang, jadi kuota tidak terbuang. ` : ''}Bila kuota harian habis, tekan “Lanjutkan dengan AI” setelah kuota direset (sekitar pukul 14.00–15.00 WIB).</p>` : ''}` : ''}
     ${done ? `<div class="row"><a class="btn" href="#/">${ic('home')}Ke beranda</a><a class="btn" href="#/buat">${ic('plus')}Buat naskah lain</a></div>` : ''}
   </div></div>`);
 }
@@ -7893,13 +8012,16 @@ VIEWS.settings = () => {
         <div class="field"><label for="aiTok">Token akses (opsional)</label><input id="aiTok" class="input" type="password" value="${esc(ai.token)}" placeholder="Sama dengan ACCESS_TOKEN di proxy" autocomplete="off"></div>
       </div>
       <div class="row"><button class="btn btn-primary" data-act="ai:test">${ic('spark')}Uji & simpan koneksi</button>${ai.url ? `<button class="btn btn-danger" data-act="ai:off">${ic('x')}Putuskan</button>` : ''}<span id="aiMsg" class="small"></span></div>
+      ${on && (+ai.proxyV || 1) < 3 ? `<div class="callout warn" style="margin-top:14px"><b>Perbarui kode proxy ke versi 3.</b> Kode proxy yang terpasang masih versi ${+ai.proxyV || 1}. Versi 3 otomatis mencoba lagi saat server Gemini sibuk, dan berpindah ke model cadangan bila model utama sibuk atau kuota hariannya habis. Caranya: klik “Salin kode” di bawah, tempel menggantikan seluruh kode lama di Apps Script lalu simpan, kemudian <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b>. URL /exec tetap sama. Setelah itu klik “Uji & simpan koneksi” sekali lagi.</div>` : ''}
+      ${on && (+ai.proxyV || 1) >= 3 ? `<p class="small muted" style="margin:10px 0 0">Proxy versi ${+ai.proxyV}. Model utama: <b>${esc(ai.model || '-')}</b>${ai.fallback ? ` • model cadangan (saat sibuk atau kuota harian habis): <b>${esc(ai.fallback)}</b>` : ' • tanpa model cadangan'}.</p>` : ''}
       <details style="margin-top:16px"><summary style="cursor:pointer;font-weight:650;color:var(--ink-900)">Cara membuat proxy dengan Google Apps Script (gratis, sekitar 5 menit)</summary>
         <ol class="steps-guide" style="margin-top:10px">
           <li>Buat kunci API di <b>Google AI Studio</b> (aistudio.google.com, menu “Get API key”).</li>
           <li>Buka <b>script.google.com</b>, buat proyek baru, hapus isi <code>Code.gs</code>, lalu tempel kode di bawah ini.</li>
-          <li>Buka <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> berisi kunci API. Bila ingin, tambahkan <code>ACCESS_TOKEN</code> (kata sandi bebas) dan <code>GEMINI_MODEL</code>.</li>
+          <li>Buka <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> berisi kunci API. Bila ingin, tambahkan <code>ACCESS_TOKEN</code> (kata sandi bebas), <code>GEMINI_MODEL</code> (model utama), dan <code>GEMINI_FALLBACK_MODEL</code> (model cadangan saat server sibuk atau kuota harian habis; bawaannya <code>gemini-flash-lite-latest</code>).</li>
           <li>Klik <b>Deploy → New deployment → Web app</b>. Pilih <i>Execute as: Me</i> dan <i>Who has access: Anyone</i>, lalu izinkan aksesnya.</li>
           <li>Salin URL web app (berakhiran <code>/exec</code>) ke kolom URL proxy di atas, isi token bila dibuat, lalu klik “Uji & simpan koneksi”.</li>
+          <li>Bila kode proxy diperbarui di kemudian hari, pilih <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b> agar URL tetap sama.</li>
         </ol>
         <div class="row" style="margin-bottom:6px"><b class="small">Kode Apps Script</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="gas">${ic('copy')}Salin kode</button></div>
         <pre class="code">${esc(AI.PROXY_GAS)}</pre>
@@ -7963,7 +8085,7 @@ ACT['ai:test'] = async (el) => {
   el.disabled = true; msg.textContent = 'Menghubungi proxy…';
   try {
     const d = await AI.test(url, token);
-    const s = STORE.settings(); s.ai = { url, token, verifiedAt: Date.now(), model: d.model || '' }; STORE.saveSettings(s);
+    const s = STORE.settings(); s.ai = { url, token, verifiedAt: Date.now(), model: d.model || '', fallback: d.fallback || '', proxyV: +d.version || 1 }; STORE.saveSettings(s);
     toast('AI terhubung.', 'ok'); VIEWS.settings(); renderTopbar('/pengaturan');
   } catch (e) {
     const s = STORE.settings(); s.ai = { url, token, verifiedAt: 0, model: '' }; STORE.saveSettings(s);

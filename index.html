@@ -9873,13 +9873,13 @@ const AI = (() => {
     if (/limit:\s*0\b/i.test(msg)) {
       const mdl = (data && data.model) || ((/model:\s*([\w.\-]+)/i.exec(msg) || [])[1]) || 'yang dipakai';
       er.daily = true;
-      er.message = `Kuota gratis model ${mdl} habis atau tidak tersedia untuk API key ini. Proxy hanya mencoba model teks gratis yang diizinkan. Tunggu kuota Google AI Studio pulih atau periksa batas akun; mode ini tidak memanggil API gambar berbayar.`;
+      er.message = `Kuota gratis model ${mdl} habis atau tidak tersedia untuk proyek Google AI Studio ini. Proxy sudah mencoba model teks gratis lain yang diizinkan. Kuota berlaku per proyek, bukan per API Key. Tunggu reset kuota Google AI Studio lalu pilih “Lanjutkan dengan AI”; bagian yang sudah berhasil disimpan akan digunakan kembali.`;
       return er;
     }
     const hint = (data && data.retryDelay) || ((/retry in\s+([\dhms.\s]+?)(?:\.\s|\.?$|\n)/i.exec(msg) || [])[1]) || '';
     er.wait = secondsOf(hint);
     er.daily = er.wait > 120 || (!er.wait && DAY_RE.test(msg));
-    if (er.daily) er.message = 'Kuota gratis Gemini untuk model yang dicoba sudah habis. Proxy sudah mencoba model cadangan gratis yang diizinkan. Tunggu sampai kuota pulih sesuai jadwal Google AI Studio, lalu lanjutkan kembali.';
+    if (er.daily) er.message = 'Kuota gratis Gemini untuk model yang dicoba sudah habis. Proxy sudah mencoba model cadangan gratis yang diizinkan. Kuota berlaku per proyek; tunggu reset sesuai jadwal Google AI Studio, lalu pilih “Lanjutkan dengan AI”. Bagian yang telah selesai tersimpan di browser dan tidak akan diminta ulang.';
     return er;
   }
   const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -9922,7 +9922,7 @@ const AI = (() => {
     for (let k = 0; k <= retries;) {
       try {
         reqStat.sent++;
-        const d = await post({ prompt, system: SYSTEM, json: true, temperature, maxOutputTokens: 8192 }, signal);
+        const d = await post({ prompt, system: SYSTEM, json: true, temperature, maxOutputTokens: 8192, thinkingLevel: 'LOW' }, signal);
         if (d.model) { lastModel = d.model; reqStat.models[d.model] = (reqStat.models[d.model] || 0) + 1; }
         const res = parseJSON(d.text);
         if (h) cachePut(h, res);
@@ -9946,7 +9946,7 @@ const AI = (() => {
   async function test(url, token) {
     // Proxy versi terbaru melakukan pemeriksaan ke model teks sungguhan, bukan hanya membalas "pong".
     const d = await post({ ping: true, verifyText: true }, null, 60000, { url, token });
-    if (+d.version < 8 || d.freeMode !== true) throw new AIError('Proxy bukan versi mode gratis v8. Salin kode proxy baru dari Pengaturan, ganti seluruh Code.gs, lalu deploy versi baru.');
+    if (+d.version < 9 || d.freeMode !== true) throw new AIError('Proxy bukan versi mode gratis v9. Salin kode proxy baru dari Pengaturan, ganti seluruh Code.gs, lalu deploy versi baru.');
     return d;
   }
   async function pool(items, n, fn, signal) {
@@ -10104,10 +10104,12 @@ Skema JSON: {"soal":[{"bentuk":"pg","kode_indikator":"I1","level":"Pemahaman","i
     const briefRule = items.some((r) => imageBriefNos.includes(+r.no))
       ? `Untuk stimulus kelompok ${items.filter((r) => imageBriefNos.includes(+r.no)).map((r) => r.no).join(', ')}, isi field stimulus.arahan_gambar_lanjutan dengan arahan foto kontekstual singkat yang kelak dapat dibuat di aplikasi lain. Arahan hanya memperjelas suasana/objek; jangan memuat angka, label, data, ukuran, atau informasi yang menjadi kunci jawaban. Ini hanya catatan untuk guru, BUKAN permintaan untuk membuat gambar sekarang.`
       : 'Field stimulus.arahan_gambar_lanjutan boleh null.';
+    const usedCodes = Array.from(new Set(items.flatMap((r) => r.kode_indikator || [])));
+    const usedIndicators = pk.indikator.filter((x) => usedCodes.includes(x.kode));
     return `TAHAP: MENYUSUN STIMULUS DAN SOAL
 Mata pelajaran: ${pk.mapel}; jenjang: ${pk.jenjang}.
-Indikator yang diuji:
-${pk.indikator.map((x) => `- ${x.kode}: ${x.kompetensi} (${x.materi})`).join('\\n')}
+Indikator yang diuji pada batch ini saja:
+${usedIndicators.map((x) => `- ${x.kode}: ${x.kompetensi} (${x.materi})`).join('\\n')}
 Untuk SETIAP rancangan berikut, buat satu stimulus orisinal, lalu tepat 3 soal yang hanya dapat dijawab dengan stimulus itu (urut dari pemahaman ke penalaran):
 ${items.map((r) => `- No ${r.no}: ${r.jenis_stimulus}. Ide: ${r.ide || '-'}.
 ${indLines(pk, r, '   ')}`).join('\\n')}
@@ -10202,7 +10204,7 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
     }
     return out;
   }
-  async function run(text, opts, hooks, signal) {
+  async function run(text, opts, hooks, signal, skipSubjects = []) {
     const count = Math.max(3, opts.count || 30);
     reqStat.sent = 0; reqStat.cached = 0; reqStat.models = {};
     // 1. Analisis seluruh mapel dengan model AI.
@@ -10217,9 +10219,22 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
     paket.forEach(({ raw }, ti) => hooks.step(ti, 0, 'done', `${raw.indikator.length} indikator dianalisis oleh Gemini; jenjang ${raw.jenjang || 'Kelas 6 SD/MI'}.`));
 
     const out = [];
+    let lastCompletedTi = -1;
+    const skipSet = new Set(skipSubjects || []);
     for (let ti = 0; ti < paket.length; ti++) {
       const pk = paket[ti].raw;
       const info = paket[ti].info;
+      if (skipSet.has(info.subject)) {
+        hooks.step(ti, 0, 'done', 'Analisis tersimpan; paket mapel ini sudah selesai pada percobaan sebelumnya.');
+        hooks.step(ti, 1, 'done', 'Paket yang sudah tersimpan dilewati agar tidak memakai kuota lagi.');
+        hooks.step(ti, 2, 'done', 'Stimulus dan soal sudah tersimpan pada perangkat ini.');
+        hooks.step(ti, 3, 'done', 'Paket lengkap; tidak dibuat ulang.');
+        hooks.step(ti, 4, 'done', 'Visual SVG/tabel/grafik sudah tersimpan.');
+        hooks.step(ti, 5, 'done', 'Validasi sebelumnya sudah selesai.');
+        hooks.step(ti, 6, 'done', 'Paket ini tidak dibuat ulang karena sudah tersimpan.');
+        lastCompletedTi = ti;
+        continue;
+      }
       pk.jenjang = pk.jenjang || 'Kelas 6 SD/MI';
       // 2. Kompetensi dan rencana: jumlah soal dikunci di aplikasi, bukan diserahkan pada perkiraan model.
       hooks.step(ti, 1, 'run');
@@ -10251,13 +10266,18 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
             const actualTypes = item.soal.map((q) => TYPE_MAP[String(q.bentuk || q.tipe || q.type || 'pg').toLowerCase().replace(/[^a-z_]/g, '')] || 'pg');
             if (actualTypes.some((type, i) => type !== (r.bentuk || [])[i])) return true;
           }
-          stims[r.no] = st; raws[r.no] = item.soal; return false;
+          stims[r.no] = st; raws[r.no] = item.soal;
+          try {
+            const onePrompt = pKelompok(pk, [r]);
+            cachePut(hashStr(0.65 + '|' + onePrompt), { kelompok: [{ no: r.no, stimulus: item.stimulus || item, soal: item.soal }] });
+          } catch (cacheError) { /* abaikan jika penyimpanan lokal penuh */ }
+          return false;
         });
       };
       const single = async (r) => {
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            const missing = take(await ask(pKelompok(pk, [r]), signal, 0.65, 1, false), [r]);
+            const missing = take(await ask(pKelompok(pk, [r]), signal, 0.65, 1, true), [r]);
             if (!missing.length) return;
           } catch (e) {
             if (fatal(e)) throw e;
@@ -10363,13 +10383,14 @@ Skema JSON: {"hasil":[{"no_kelompok":1,"no_soal":1,"status":"ok","catatan":"","s
       const v = ENGINE.validate(pkg, { codes: pkg.analysis.codes });
       v.fixed = fixed; pkg.validation = v;
       hooks.step(ti, 5, 'done', `Validasi silang AI: ${fixed} soal diperbaiki${vErr ? ' (AI tidak merespons validasi; pemeriksaan lokal tetap dilakukan dan ditandai)' : ''}. Validasi lokal: ${v.summary.ok} lolos, ${v.summary.warn} catatan, ${v.summary.fail} gagal.`);
+      if (typeof hooks.package === 'function') hooks.package(pkg, ti);
       hooks.step(ti, 6, 'run');
       hooks.step(ti, 6, 'done', `Naskah “${pkg.title}” siap: ${nq} soal, ${groups.length} stimulus, ${visualCount} visual SVG/tabel/grafik, ${imageBriefCount} arahan gambar opsional.`);
       out.push(pkg);
+      lastCompletedTi = ti;
     }
     cacheClear();
-    const lp = out[out.length - 1];
-    hooks.step(out.length - 1, 6, 'done', `Naskah selesai. Total permintaan AI teks: ${reqStat.sent}${reqStat.cached ? ` (+${reqStat.cached} bagian dari cache)` : ''}; model teks: ${Object.keys(reqStat.models).join(', ') || lastModel || '-'}; visual: SVG/tabel/grafik lokal dari data AI; tidak ada API gambar berbayar.`);
+    if (lastCompletedTi >= 0 && out.length) hooks.step(lastCompletedTi, 6, 'done', `Naskah selesai. Total permintaan AI teks: ${reqStat.sent}${reqStat.cached ? ` (+${reqStat.cached} bagian dari cache)` : ''}; model teks: ${Object.keys(reqStat.models).join(', ') || lastModel || '-'}; visual: SVG/tabel/grafik lokal dari data AI; tidak ada API gambar berbayar.`);
     return out;
   }
 
@@ -10404,7 +10425,7 @@ Soal yang diganti: ${JSON.stringify(q.text)}`;
 
   // ---------------- Kode proxy untuk disalin guru ----------------
   const PROXY_GAS = `/**
- * TKA GURU — Gemini FREE TEXT PROXY v8
+ * TKA GURU — Gemini FREE TEXT PROXY v9
  * Mode: Gemini teks + visual SVG/tabel. Tidak ada API gambar / Nano Banana.
  * Script Properties wajib: GEMINI_API_KEY
  * Opsional: ACCESS_TOKEN, GEMINI_MODEL (hanya model dalam allowlist gratis),
@@ -10412,7 +10433,7 @@ Soal yang diganti: ${JSON.stringify(q.text)}`;
  * Deploy Web App: Execute as Me; Who has access: Anyone.
  * Perubahan kode: Deploy > Manage deployments > Edit > New version > Deploy.
  */
-var PROXY_VERSION = 8;
+var PROXY_VERSION = 9;
 var DEFAULT_MODEL = 'gemini-3.8-flash';
 var DEFAULT_FALLBACK = 'gemini-3.7-flash,gemini-3.6-flash';
 var FREE_TEXT_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
@@ -10444,7 +10465,9 @@ function doPost(e) {
       maxOutputTokens: body.ping ? 192 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)),
       responseMimeType: body.json ? 'application/json' : 'text/plain'
     };
-    if (body.ping) generationConfig.thinkingConfig = { thinkingLevel: 'MINIMAL', includeThoughts: false };
+    var requestedThinking = String(body.thinkingLevel || (body.ping ? 'MINIMAL' : 'LOW')).toUpperCase();
+    if (['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'].indexOf(requestedThinking) < 0) requestedThinking = 'LOW';
+    generationConfig.thinkingConfig = { thinkingLevel: body.ping ? 'MINIMAL' : requestedThinking, includeThoughts: false };
     var payload = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: generationConfig
@@ -10454,7 +10477,7 @@ function doPost(e) {
     var result = callFreeModels_(models, payload, apiKey);
     if (result.code !== 200) return out_({
       ok: false, status: result.code, model: result.model,
-      retryDelay: result.retryDelay || '', error: result.error || 'Permintaan ke Gemini gagal.'
+      retryDelay: result.retryDelay || '', attempts: result.attempts || [], error: result.error || 'Permintaan ke Gemini gagal.'
     });
     var parts = ((((result.data || {}).candidates || [])[0] || {}).content || {}).parts || [];
     var text = parts.filter(function(p) { return !p.thought; }).map(function(p) { return p.text || ''; }).join('');
@@ -10475,7 +10498,8 @@ function doPost(e) {
 }
 
 function callFreeModels_(models, payload, apiKey) {
-  var last = { code: 0, error: 'Tidak ada model gratis yang dapat dihubungi.' };
+  var attempts = [];
+  var last = { code: 0, error: 'Tidak ada model gratis yang dapat dihubungi.', attempts: attempts };
   for (var i = 0; i < models.length; i++) {
     var model = models[i];
     var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
@@ -10486,7 +10510,8 @@ function callFreeModels_(models, payload, apiKey) {
         headers: { 'x-goog-api-key': apiKey }, payload: JSON.stringify(payload), muteHttpExceptions: true
       });
     } catch (err) {
-      last = { code: 0, model: model, error: String(err) };
+      attempts.push({ model: model, status: 0, error: String(err).slice(0, 240) });
+      last = { code: 0, model: model, error: String(err), attempts: attempts };
       continue;
     }
     var code = response.getResponseCode();
@@ -10500,7 +10525,8 @@ function callFreeModels_(models, payload, apiKey) {
       var details = data.error.details || [];
       for (var d = 0; d < details.length; d++) if (details[d].retryDelay) retry = details[d].retryDelay;
     } catch (e2) {}
-    last = { code: code, model: model, error: String(msg).slice(0, 1800), retryDelay: retry };
+    attempts.push({ model: model, status: code, retryDelay: retry, error: String(msg).slice(0, 240) });
+    last = { code: code, model: model, error: String(msg).slice(0, 1800), retryDelay: retry, attempts: attempts };
     if ([400, 401, 403].indexOf(code) >= 0) break;
   }
   return last;
@@ -10514,10 +10540,10 @@ function doGet() {
   return out_({ ok: true, info: 'TKA GURU free text proxy aktif. Hanya Gemini teks + SVG/tabel; API gambar tidak tersedia pada mode ini.', version: PROXY_VERSION, freeMode: true, allowedModels: FREE_TEXT_MODELS });
 }`;
 
-  const PROXY_CF = `// TKA GURU — Cloudflare Worker FREE TEXT PROXY v8
+  const PROXY_CF = `// TKA GURU — Cloudflare Worker FREE TEXT PROXY v9
 // Secrets: GEMINI_API_KEY (required), ACCESS_TOKEN (optional).
 // Vars: GEMINI_MODEL (only allowlisted free models), GEMINI_FALLBACK_MODEL (optional).
-const VERSION = 8;
+const VERSION = 9;
 const FREE_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
 const DEFAULT_MODEL = 'gemini-3.8-flash';
 const DEFAULT_FALLBACK = ['gemini-3.7-flash', 'gemini-3.6-flash'];
@@ -10547,12 +10573,14 @@ export default {
         maxOutputTokens: body.ping ? 192 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)),
         responseMimeType: body.json ? 'application/json' : 'text/plain'
       };
-      if (body.ping) generationConfig.thinkingConfig = { thinkingLevel: 'MINIMAL', includeThoughts: false };
+      const requestedThinking = String(body.thinkingLevel || (body.ping ? 'MINIMAL' : 'LOW')).toUpperCase();
+      generationConfig.thinkingConfig = { thinkingLevel: body.ping ? 'MINIMAL' : (['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'].includes(requestedThinking) ? requestedThinking : 'LOW'), includeThoughts: false };
       const payload = {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig
       };
       if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
+      const attempts = [];
       let last = { status: 0, error: 'Tidak ada model gratis yang dapat dihubungi.' };
       for (const model of models) {
         const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
@@ -10570,10 +10598,11 @@ export default {
           }
           return json({ ok: true, text, model, fallback: fallback.join(', '), version: VERSION, freeMode: true, visualMode: 'SVG + tabel + grafik', allowedModels: FREE_MODELS, configuredModelWasRestricted: configured !== primary });
         }
-        last = { status: res.status, model, error: data.error?.message || ('HTTP ' + res.status) };
+        attempts.push({ model, status: res.status, error: String(data.error?.message || ('HTTP ' + res.status)).slice(0, 240) });
+        last = { status: res.status, model, error: data.error?.message || ('HTTP ' + res.status), attempts };
         if ([400, 401, 403].includes(res.status)) break;
       }
-      return json({ ok: false, status: last.status, model: last.model, error: last.error });
+      return json({ ok: false, status: last.status, model: last.model, attempts, error: last.error });
     } catch (err) {
       return json({ ok: false, error: String(err && err.message ? err.message : err) }, 500);
     }
@@ -11067,7 +11096,7 @@ VIEWS.create = () => {
               <button data-act="kisi:engine" data-e="ai" class="${APP.engineChoice === 'ai' ? 'on' : ''}">${ic('spark')} AI Gemini</button>
               <button data-act="kisi:engine" data-e="lokal" class="${APP.engineChoice === 'lokal' ? 'on' : ''}">Generator lokal</button></div>
               <p class="small muted" style="margin:10px 0 0">${APP.engineChoice === 'ai' ? 'Gemini membuat soal baru dari kisi-kisi, menyusun stimulus, kunci, dan pembahasan, lalu membuat visual SVG/tabel/grafik yang bisa dicetak. Beberapa stimulus juga menyimpan arahan foto opsional yang dapat Anda ekspor untuk pengayaan di aplikasi lain. Mode ini tidak memanggil Nano Banana atau API gambar berbayar.' : 'Generator lokal bekerja tanpa internet memakai template soal Matematika, bank bacaan Bahasa Indonesia, dan bank soal IPAS bawaan. Ini hanya digunakan karena Anda memilihnya.'}</p>
-              ${APP.engineChoice === 'ai' && !aiOn ? `<div class="callout warn" style="margin-top:10px">AI belum terverifikasi. Hubungkan Gemini pada <a href="#/pengaturan">Pengaturan</a> dan gunakan proxy mode gratis versi 8. Generator tidak akan beralih ke lokal secara otomatis.</div>` : ''}`
+              ${APP.engineChoice === 'ai' && !aiOn ? `<div class="callout warn" style="margin-top:10px">AI belum terverifikasi. Hubungkan Gemini pada <a href="#/pengaturan">Pengaturan</a> dan gunakan proxy mode gratis versi 9. Generator tidak akan beralih ke lokal secara otomatis.</div>` : ''}`
             : APP.engineChoice === 'lokal'
               ? `<div class="engine-box"><b>Generator lokal dipilih secara sadar.</b> Sesi ini akan menggunakan bank/template lokal. Untuk kembali ke AI, hubungkan dan verifikasi Gemini di <a href="#/pengaturan">Pengaturan</a>.</div>`
               : `<div class="engine-box"><b>AI Gemini belum terverifikasi.</b> Aplikasi tidak akan otomatis membuat soal dengan generator lokal. <a href="#/pengaturan">Hubungkan dan uji AI Gemini</a> terlebih dahulu. <div style="margin-top:10px"><button class="btn btn-sm" data-act="kisi:engine" data-e="lokal">Saya memilih generator lokal untuk sesi ini</button></div></div>`}
@@ -11123,7 +11152,7 @@ ACT['kisi:go'] = () => {
   if (!text) { toast('Isi kisi-kisi terlebih dahulu.', 'bad'); $('#kisi').focus(); return; }
   const engine = APP.engineChoice === 'lokal' ? 'lokal' : 'ai';
   if (engine === 'ai' && !AI.ready()) {
-    modal({ title: 'Koneksi AI belum siap', body: '<p>Generator AI belum terverifikasi. Buka Pengaturan → Koneksi AI Gemini, pasang proxy mode gratis versi 8, uji Gemini teks, dan simpan konfigurasi. Visual Matematika/IPAS dibuat sebagai SVG/tabel; tidak memerlukan model gambar berbayar.</p>' });
+    modal({ title: 'Koneksi AI belum siap', body: '<p>Generator AI belum terverifikasi. Buka Pengaturan → Koneksi AI Gemini, pasang proxy mode gratis versi 9, uji Gemini teks, dan simpan konfigurasi. Visual Matematika/IPAS dibuat sebagai SVG/tabel; tidak memerlukan model gambar berbayar.</p>' });
     return;
   }
   const r = ENGINE.analyze(text);
@@ -11163,7 +11192,7 @@ function renderProc() {
         ${t.pkgId ? `<div class="row" style="margin-top:14px"><a class="btn btn-primary" href="#/naskah/${t.pkgId}">${ic('eye')}Lihat naskah</a><a class="btn" href="#/ujian/${t.pkgId}">${ic('play')}Mode ujian</a><a class="btn" href="#/edit/${t.pkgId}">${ic('edit')}Edit</a></div>` : ''}
         ${t.error ? `<div class="callout warn" style="margin-top:12px">${esc(t.error)}</div>` : ''}</section>`;
     }).join('') : `<section class="proc-card"><ol class="steps"><li class="step run"><div class="dot">1</div><div><div class="st-t">Menganalisis kisi-kisi</div><div class="st-d">Menyiapkan…</div></div></li></ol></section>`}
-    ${err ? `<div class="callout warn"><b>Penyebab:</b> ${esc(P.error || 'Tidak diketahui')}</div><div class="row" style="margin-top:14px"><a class="btn" href="#/buat">${ic('left')}Kembali ke kisi-kisi</a>${P.engine === 'ai' ? `<button class="btn btn-primary" data-act="proc:local">Gunakan generator lokal</button><button class="btn" data-act="proc:retry">${ic('refresh')}Lanjutkan dengan AI</button>` : ''}</div>${P.engine === 'ai' ? `<p class="small muted" style="margin:10px 0 0">${AI.cacheCount() ? `${AI.cacheCount()} bagian yang sudah berhasil tersimpan dan tidak akan diminta ulang, jadi kuota tidak terbuang. ` : ''}Bila kuota harian habis, tekan “Lanjutkan dengan AI” setelah kuota direset (sekitar pukul 14.00–15.00 WIB).</p>` : ''}` : ''}
+    ${err ? `<div class="callout warn"><b>Penyebab:</b> ${esc(P.error || 'Tidak diketahui')}</div><div class="row" style="margin-top:14px"><a class="btn" href="#/buat">${ic('left')}Kembali ke kisi-kisi</a>${P.engine === 'ai' ? `<button class="btn btn-primary" data-act="proc:local">Gunakan generator lokal</button><button class="btn" data-act="proc:retry">${ic('refresh')}Lanjutkan dengan AI</button>` : ''}</div>${P.engine === 'ai' ? `<p class="small muted" style="margin:10px 0 0">${AI.cacheCount() ? `Cache lokal tersedia (${AI.cacheCount()} entri); bagian yang cocok dengan permintaan saat ini akan dipakai kembali. ` : ''}Jika kuota harian habis, tunggu sampai kuota proyek pulih sesuai jadwal Google AI Studio, lalu tekan “Lanjutkan dengan AI”. Bagian yang sudah berhasil disimpan di browser akan digunakan kembali.</p>` : ''}` : ''}
     ${done ? `<div class="row"><a class="btn" href="#/">${ic('home')}Ke beranda</a><a class="btn" href="#/buat">${ic('plus')}Buat naskah lain</a></div>` : ''}
   </div></div>`);
 }
@@ -11174,14 +11203,25 @@ async function runProc(P) {
     if (P.engine === 'ai') {
       // Semua mapel termasuk IPAS wajib melalui AI. Generator lokal hanya berjalan
       // pada jalur eksplisit P.engine === 'lokal' (tidak pernah menjadi fallback diam-diam).
-      P.tracks = [];
       P.ctrl = new AbortController();
-      const pkgs = await AI.run(P.text, P.opts, {
-        tracks: (list) => { P.tracks = list.map((x) => ({ label: x.label, subject: x.subject, subjectName: x.subjectName, steps: [] })); renderProc(); },
+      const completedSubjects = (P.tracks || []).filter((t) => t && t.pkgId && t.subject).map((t) => t.subject);
+      await AI.run(P.text, P.opts, {
+        tracks: (list) => {
+          const previous = P.tracks || [];
+          if (list.length === 1 && !list[0].subject) {
+            if (!previous.length) P.tracks = list.map((x) => ({ label: x.label, subject: null, steps: [] }));
+          } else {
+            P.tracks = list.map((x) => {
+              const old = previous.find((t) => t && t.subject === x.subject);
+              return old ? Object.assign(old, { label: x.label, subjectName: x.subjectName }) : { label: x.label, subject: x.subject, subjectName: x.subjectName, steps: [] };
+            });
+          }
+          renderProc();
+        },
         step: (ti, si, state, detail) => { const t = P.tracks[ti]; if (!t) return; t.steps[si] = { state, detail }; if (state === 'done') t.sub = 0; renderProc(); },
         sub: (ti, frac) => { const t = P.tracks[ti]; if (t) { t.sub = frac; renderProc(); } },
-      }, P.ctrl.signal);
-      pkgs.forEach((pkg, i) => { STORE.savePkg(pkg); P.tracks[i].pkgId = pkg.id; });
+        package: (pkg, ti) => { STORE.savePkg(pkg); if (P.tracks[ti]) P.tracks[ti].pkgId = pkg.id; renderProc(); }
+      }, P.ctrl.signal, completedSubjects);
     } else {
       let analyses, avoid = null;
       if (P.variant) {
@@ -11233,7 +11273,7 @@ async function localTrack(P, a, nTracks, avoid, minStep) {
 }
 ACT['proc:cancel'] = () => { if (APP.proc && APP.proc.ctrl) APP.proc.ctrl.abort(); };
 ACT['proc:local'] = () => { const P = APP.proc; APP.proc = { text: P.text, engine: 'lokal', opts: P.opts, tracks: [], state: 'idle', started: Date.now(), ipasDone: P.ipasDone }; VIEWS.process(); };
-ACT['proc:retry'] = () => { const P = APP.proc; APP.proc = { text: P.text, engine: 'ai', opts: P.opts, tracks: [], state: 'idle', started: Date.now(), ipasDone: P.ipasDone }; VIEWS.process(); };
+ACT['proc:retry'] = () => { const P = APP.proc; APP.proc = { text: P.text, engine: 'ai', opts: P.opts, tracks: P.tracks || [], state: 'idle', started: P.started || Date.now(), ipasDone: P.ipasDone }; VIEWS.process(); };
 
 /* ===== 83_ui_doc.js ===== */
 /* ==========================================================================
@@ -12132,8 +12172,8 @@ VIEWS.settings = () => {
   const s = STORE.settings();
   const ai = s.ai || {};
   const on = AI.ready();
-  const outdated = !!(ai.url && (+ai.proxyV || 0) < 8);
-  const proxyV8Detected = (+ai.proxyV || 0) >= 8 && ai.freeMode === true;
+  const outdated = !!(ai.url && (+ai.proxyV || 0) < 9);
+  const proxyV9Detected = (+ai.proxyV || 0) >= 9 && ai.freeMode === true;
   setView(`<div class="wrap" style="max-width:980px">
     <div class="page-head"><div><h1>Pengaturan</h1><p>Data naskah dan pengaturan tersimpan di browser perangkat ini (localStorage). Gunakan ekspor untuk memindahkan naskah ke perangkat lain.</p></div></div>
     <section class="panel"><h2 style="font-size:17px;color:var(--ink-900)">Profil guru</h2>
@@ -12146,9 +12186,9 @@ VIEWS.settings = () => {
       <button class="btn btn-primary" data-act="set:save">${ic('check')}Simpan profil</button>
     </section>
 
-    <section class="panel"><div class="row"><h2 style="font-size:17px;color:var(--ink-900);margin:0">Koneksi AI Gemini — Mode Gratis</h2><span class="spacer"></span><span class="chip ${on ? 'ok' : proxyV8Detected ? 'warn' : 'gray'}">${on ? 'AI teks & proxy gratis siap' + (ai.model ? ' • ' + esc(ai.model) : '') : proxyV8Detected ? 'Proxy v8 terdeteksi — AI belum terverifikasi' : outdated ? 'Proxy belum terverifikasi / versi lama' : 'Belum terhubung'}</span></div>
+    <section class="panel"><div class="row"><h2 style="font-size:17px;color:var(--ink-900);margin:0">Koneksi AI Gemini — Mode Gratis</h2><span class="spacer"></span><span class="chip ${on ? 'ok' : proxyV9Detected ? 'warn' : 'gray'}">${on ? 'AI teks & proxy gratis siap' + (ai.model ? ' • ' + esc(ai.model) : '') : proxyV9Detected ? 'Proxy v9 terdeteksi — AI belum terverifikasi' : outdated ? 'Proxy belum terverifikasi / versi lama' : 'Belum terhubung'}</span></div>
       <div class="callout ok" style="margin:12px 0"><b>Mode gratis aktif sebagai standar.</b> Gemini menangani analisis kisi-kisi, penyusunan stimulus, soal, kunci, pembahasan, dan validasi. Visual dibuat sebagai SVG, diagram, tabel, grafik, serta piktogram dari data yang dihasilkan AI. Aplikasi tidak memanggil Nano Banana, API gambar, atau model berbayar.</div>
-      <p class="small muted">Model utama: <code>gemini-3.8-flash</code>. Bila model utama terkena batas kuota atau tidak tersedia, proxy mencoba model teks gratis yang diizinkan: <code>gemini-3.7-flash</code> dan <code>gemini-3.6-flash</code>. Batas gratis tetap mengikuti kuota akun Google AI Studio; jika seluruh model mencapai batas, proses perlu dilanjutkan setelah kuota pulih.</p>
+      <p class="small muted">Model utama: <code>gemini-3.8-flash</code>. Bila model utama terkena batas kuota atau tidak tersedia, proxy mencoba model teks gratis yang diizinkan: <code>gemini-3.7-flash</code> dan <code>gemini-3.6-flash</code>. Batas gratis mengikuti kuota proyek Google AI Studio; jika seluruh model mencapai batas, proses perlu dilanjutkan setelah kuota pulih.</p>
       <div class="callout" style="margin-bottom:14px">${ic('shield')} <b>Keamanan kunci API.</b> Kunci API Gemini disimpan di Script Properties pada Google Apps Script / secret Cloudflare Worker, bukan di file HTML atau browser. Untuk mode ini, tidak perlu mengaktifkan billing model gambar. Hindari memasukkan nama lengkap, NISN, kata sandi, atau data pribadi siswa ke dalam prompt AI.</div>
       <div class="grid-2" style="grid-template-columns:2fr 1fr;gap:12px">
         <div class="field"><label for="aiUrl">URL proxy</label><input id="aiUrl" class="input" value="${esc(ai.url)}" placeholder="https://script.google.com/macros/s/…/exec" inputmode="url" autocomplete="off"></div>
@@ -12159,13 +12199,13 @@ VIEWS.settings = () => {
         ${ai.url ? `<button class="btn btn-danger" data-act="ai:off">${ic('x')}Putuskan</button>` : ''}
         <span id="aiMsg" class="small"></span>
       </div>
-      ${outdated ? `<div class="callout warn" style="margin-top:14px"><b>Proxy belum berhasil diverifikasi sebagai versi 8.</b> Status ini belum memastikan deployment lama; tes koneksi belum menyimpan nomor versi. Periksa URL <code>/exec</code>, lalu pastikan deployment memakai <b>New version</b> dari kode Apps Script terbaru.</div>` : ''}
-      ${proxyV8Detected && !on ? `<div class="callout warn" style="margin-top:14px"><b>Proxy versi 8 terdeteksi, tetapi AI belum lolos tes.</b> Periksa pesan tes di atas. Ini berbeda dari proxy lama; kemungkinan masalah berada pada respons model, kuota, atau konfigurasi API Key.</div>` : ''}
+      ${outdated ? `<div class="callout warn" style="margin-top:14px"><b>Proxy belum berhasil diverifikasi sebagai versi 9.</b> Status ini belum memastikan deployment lama; tes koneksi belum menyimpan nomor versi. Periksa URL <code>/exec</code>, lalu pastikan deployment memakai <b>New version</b> dari kode Apps Script terbaru.</div>` : ''}
+      ${proxyV9Detected && !on ? `<div class="callout warn" style="margin-top:14px"><b>Proxy versi 9 terdeteksi, tetapi AI belum lolos tes.</b> Periksa pesan tes di atas. Ini berbeda dari proxy lama; kemungkinan masalah berada pada respons model, kuota, atau konfigurasi API Key.</div>` : ''}
       ${on ? `<div class="callout ok" style="margin-top:12px"><b>Proxy gratis versi ${+ai.proxyV} terverifikasi.</b><br>Model aktif: <b>${esc(ai.model || 'Gemini')}</b>${ai.fallback ? ` • model cadangan: ${esc(ai.fallback)}` : ''}<br>Mode visual: <b>SVG + tabel + grafik</b><br>API gambar: <b>tidak dipanggil</b></div>` : ''}
       <details style="margin-top:16px" open><summary style="cursor:pointer;font-weight:650;color:var(--ink-900)">Panduan memasang proxy gratis dengan Google Apps Script</summary>
         <ol class="steps-guide" style="margin-top:10px">
           <li>Buka <b>Google AI Studio</b> dan buat API Key. Pastikan akun/model memiliki kuota free tier.</li>
-          <li>Buka <b>script.google.com</b>, buat proyek Apps Script, lalu ganti seluruh isi <code>Code.gs</code> dengan kode proxy versi 8 di bawah.</li>
+          <li>Buka <b>script.google.com</b>, buat proyek Apps Script, lalu ganti seluruh isi <code>Code.gs</code> dengan kode proxy versi 9 di bawah.</li>
           <li>Di <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> dengan API Key Anda. Opsional: tambahkan <code>ACCESS_TOKEN</code> dan isi token yang sama pada kolom Token akses di atas.</li>
           <li>Model dibatasi otomatis pada daftar gratis: <code>gemini-3.8-flash</code>, <code>gemini-3.7-flash</code>, dan <code>gemini-3.6-flash</code>. Properti model lama yang menunjuk ke model di luar allowlist akan diabaikan dan tidak dipanggil.</li>
           <li>Klik <b>Deploy → New deployment → Web app</b>. Pilih <i>Execute as: Me</i> dan <i>Who has access: Anyone</i>, lalu izinkan akses.</li>
@@ -12235,7 +12275,7 @@ ACT['ai:test'] = async (el) => {
   el.disabled = true; msg.textContent = 'Menguji model teks Gemini dan memeriksa mode gratis…';
   try {
     const d = await AI.test(url, token);
-    if (+d.version < 8 || d.freeMode !== true) throw new Error('Proxy belum menggunakan mode gratis versi 8. Salin kode proxy baru, ganti seluruh Code.gs, lalu deploy New version.');
+    if (+d.version < 8 || d.freeMode !== true) throw new Error('Proxy belum menggunakan mode gratis versi 9. Salin kode proxy baru, ganti seluruh Code.gs, lalu deploy New version.');
     const s = STORE.settings();
     s.ai = {
       url, token, verifiedAt: Date.now(), model: d.model || 'gemini-3.8-flash',

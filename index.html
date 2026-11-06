@@ -9814,7 +9814,7 @@ const AI = (() => {
   class AIError extends Error {}
   const LET = ['A', 'B', 'C', 'D', 'E', 'F'];
   const cfg = () => STORE.settings().ai || {};
-  const ready = () => { const c = cfg(); return !!(c.url && c.verifiedAt && c.freeMode === true && (+c.proxyV || 0) >= 8); };
+  const ready = () => { const c = cfg(); return !!(c.url && c.verifiedAt && c.freeMode === true && (+c.proxyV || 0) >= 10); };
 
   async function post(body, signal, timeoutMs = 170000, override) {
     const c = override || cfg();
@@ -9868,6 +9868,12 @@ const AI = (() => {
       er.message = `Server Gemini sedang sibuk${st ? ` (HTTP ${st})` : ''}. Ini gangguan sementara di pihak Google. Coba lanjutkan kembali beberapa saat lagi. Pesan Google: “${msg.slice(0, 160)}”`;
       return er;
     }
+    if (data && Array.isArray(data.providerErrors) && data.providerErrors.length) {
+      er.multiProvider = true;
+      er.providerErrors = data.providerErrors;
+      er.message = String(data.error || 'Semua provider AI cadangan gagal. Periksa status masing-masing provider di Pengaturan.');
+      return er;
+    }
     if (!(st === 429 || RATE_RE.test(msg))) return er;
     er.rate = true;
     if (/limit:\s*0\b/i.test(msg)) {
@@ -9904,7 +9910,7 @@ const AI = (() => {
     }
   }
   let lastModel = '';
-  const reqStat = { sent: 0, cached: 0, models: {} };
+  const reqStat = { sent: 0, cached: 0, models: {}, providers: {} };
   // ---- Cache hasil per bagian: bila proses terhenti (kuota/server sibuk), bagian yang sudah
   // berhasil tidak diminta ulang saat guru menekan "Lanjutkan dengan AI" (kuota tidak terbuang).
   const CACHE_KEY = 'aicache', CACHE_TTL = 36 * 3600 * 1000;
@@ -9924,6 +9930,7 @@ const AI = (() => {
         reqStat.sent++;
         const d = await post({ prompt, system: SYSTEM, json: true, temperature, maxOutputTokens: 8192, thinkingLevel: 'LOW' }, signal);
         if (d.model) { lastModel = d.model; reqStat.models[d.model] = (reqStat.models[d.model] || 0) + 1; }
+        if (d.provider) reqStat.providers[d.provider] = (reqStat.providers[d.provider] || 0) + 1;
         const res = parseJSON(d.text);
         if (h) cachePut(h, res);
         return res;
@@ -9944,10 +9951,13 @@ const AI = (() => {
     throw lastErr;
   }
   async function test(url, token) {
-    // Proxy versi terbaru melakukan pemeriksaan ke model teks sungguhan, bukan hanya membalas "pong".
+    // Tes ini mengirim permintaan teks nyata; bila Gemini kehabisan kuota, proxy boleh memakai provider cadangan yang sudah dikonfigurasi.
     const d = await post({ ping: true, verifyText: true }, null, 60000, { url, token });
-    if (+d.version < 9 || d.freeMode !== true) throw new AIError('Proxy bukan versi mode gratis v9. Salin kode proxy baru dari Pengaturan, ganti seluruh Code.gs, lalu deploy versi baru.');
+    if (+d.version < 10 || d.freeMode !== true) throw new AIError('Proxy bukan versi Multi-AI v10. Salin kode proxy baru dari Pengaturan, ganti seluruh Code.gs, lalu deploy versi baru.');
     return d;
+  }
+  async function testProviders(url, token) {
+    return await post({ providerTest: true }, null, 150000, { url, token });
   }
   async function pool(items, n, fn, signal) {
     const out = new Array(items.length);
@@ -10425,15 +10435,15 @@ Soal yang diganti: ${JSON.stringify(q.text)}`;
 
   // ---------------- Kode proxy untuk disalin guru ----------------
   const PROXY_GAS = `/**
- * TKA GURU — Gemini FREE TEXT PROXY v9
- * Mode: Gemini teks + visual SVG/tabel. Tidak ada API gambar / Nano Banana.
- * Script Properties wajib: GEMINI_API_KEY
- * Opsional: ACCESS_TOKEN, GEMINI_MODEL (hanya model dalam allowlist gratis),
- * GEMINI_FALLBACK_MODEL (hanya model dalam allowlist gratis).
+ * TKA GURU — MULTI-AI FREE TEXT PROXY v10
+ * Primary: Gemini API (free tier). Fallback: Groq Free, then OpenRouter free models.
+ * Script Properties (all keys server-side only):
+ *   GEMINI_API_KEY (recommended), GROQ_API_KEY (optional), OPENROUTER_API_KEY (optional)
+ *   ACCESS_TOKEN (optional), GROQ_MODEL (optional), OPENROUTER_MODEL (optional)
+ *   AI_PROVIDER_ORDER (optional; default GROQ,OPENROUTER)
  * Deploy Web App: Execute as Me; Who has access: Anyone.
- * Perubahan kode: Deploy > Manage deployments > Edit > New version > Deploy.
  */
-var PROXY_VERSION = 9;
+var PROXY_VERSION = 10;
 var DEFAULT_MODEL = 'gemini-3.8-flash';
 var DEFAULT_FALLBACK = 'gemini-3.7-flash,gemini-3.6-flash';
 var FREE_TEXT_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
@@ -10443,11 +10453,12 @@ function doPost(e) {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var props = PropertiesService.getScriptProperties();
     var expectedToken = props.getProperty('ACCESS_TOKEN') || '';
-    if (expectedToken && String(body.token || '') !== expectedToken) return out_({ ok: false, error: 'Token akses tidak cocok.' });
-    var apiKey = props.getProperty('GEMINI_API_KEY');
-    if (!apiKey) return out_({ ok: false, error: 'GEMINI_API_KEY belum diisi di Script Properties.' });
-    if (body.image) return out_({ ok: false, error: 'Mode gratis TKA GURU hanya menggunakan AI teks dan SVG/tabel. API gambar berbayar sengaja dinonaktifkan.' });
+    if (expectedToken && String(body.token || '') !== expectedToken) return out_({ ok: false, error: 'Token akses tidak cocok.', version: PROXY_VERSION, freeMode: true });
+    if (body.image) return out_({ ok: false, error: 'Mode gratis hanya memakai AI teks dan visual SVG/tabel. API gambar tidak dipanggil.', version: PROXY_VERSION, freeMode: true });
 
+    if (body.providerTest) return out_(testAlternativeProviders_(props));
+
+    var geminiKey = props.getProperty('GEMINI_API_KEY') || '';
     var configured = props.getProperty('GEMINI_MODEL') || DEFAULT_MODEL;
     var primary = FREE_TEXT_MODELS.indexOf(configured) >= 0 ? configured : DEFAULT_MODEL;
     var fallbackRaw = props.getProperty('GEMINI_FALLBACK_MODEL') || DEFAULT_FALLBACK;
@@ -10456,159 +10467,187 @@ function doPost(e) {
     });
     FREE_TEXT_MODELS.forEach(function(m) { if (m !== primary && fallback.indexOf(m) < 0) fallback.push(m); });
     var models = [primary].concat(fallback);
-
     var prompt = body.ping ? 'Balas hanya dengan token TKA_READY. Jangan menambahkan penjelasan.' : String(body.prompt || '');
     if (!prompt) return out_({ ok: false, error: 'Prompt teks kosong.', version: PROXY_VERSION, freeMode: true });
-    var generationConfig = {
-      // Tes koneksi memakai token yang cukup. Pada Gemini 3.x, jatah 32 token
-      // bisa habis untuk proses thinking sebelum teks jawaban dikeluarkan.
-      maxOutputTokens: body.ping ? 192 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)),
-      responseMimeType: body.json ? 'application/json' : 'text/plain'
-    };
-    var requestedThinking = String(body.thinkingLevel || (body.ping ? 'MINIMAL' : 'LOW')).toUpperCase();
-    if (['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'].indexOf(requestedThinking) < 0) requestedThinking = 'LOW';
-    generationConfig.thinkingConfig = { thinkingLevel: body.ping ? 'MINIMAL' : requestedThinking, includeThoughts: false };
-    var payload = {
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: generationConfig
-    };
-    if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
 
-    var result = callFreeModels_(models, payload, apiKey);
-    if (result.code !== 200) return out_({
-      ok: false, status: result.code, model: result.model,
-      retryDelay: result.retryDelay || '', attempts: result.attempts || [], error: result.error || 'Permintaan ke Gemini gagal.'
-    });
-    var parts = ((((result.data || {}).candidates || [])[0] || {}).content || {}).parts || [];
-    var text = parts.filter(function(p) { return !p.thought; }).map(function(p) { return p.text || ''; }).join('');
-    if (body.ping && !String(text || '').trim()) {
-      var candidate = ((((result.data || {}).candidates || [])[0]) || {});
-      var block = (result.data || {}).promptFeedback || {};
-      return out_({ ok: false, version: PROXY_VERSION, freeMode: true, model: result.model,
-        error: 'Proxy versi ' + PROXY_VERSION + ' sudah menjangkau Gemini (' + result.model + '), tetapi model tidak mengirim teks jawaban. Finish reason: ' + (candidate.finishReason || 'tidak tersedia') + (block.blockReason ? '; prompt block: ' + block.blockReason : '') + '. Tes sudah diatur ulang dengan thinking minimal; coba sekali lagi.' });
+    var failures = [];
+    if (geminiKey) {
+      var generationConfig = {
+        maxOutputTokens: body.ping ? 192 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)),
+        responseMimeType: body.json ? 'application/json' : 'text/plain'
+      };
+      var thinking = String(body.thinkingLevel || (body.ping ? 'MINIMAL' : 'LOW')).toUpperCase();
+      if (['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'].indexOf(thinking) < 0) thinking = 'LOW';
+      generationConfig.thinkingConfig = { thinkingLevel: body.ping ? 'MINIMAL' : thinking, includeThoughts: false };
+      var payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: generationConfig };
+      if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
+      var g = callFreeModels_(models, payload, geminiKey);
+      if (g.code === 200) {
+        var parts = ((((g.data || {}).candidates || [])[0] || {}).content || {}).parts || [];
+        var gText = parts.filter(function(x) { return !x.thought; }).map(function(x) { return x.text || ''; }).join('');
+        var valid = !body.json || validJsonText_(gText);
+        if (String(gText || '').trim() && valid) return success_(gText, 'Gemini', g.model, 'Gemini', failures, fallback.join(', '));
+        failures.push({ provider: 'Gemini', model: g.model, status: 200, error: 'Gemini mengembalikan teks kosong atau JSON tidak valid.' });
+      } else {
+        failures.push({ provider: 'Gemini', model: g.model || primary, status: g.code, error: String(g.error || 'Gagal').slice(0, 320), retryDelay: g.retryDelay || '' });
+      }
+    } else {
+      failures.push({ provider: 'Gemini', model: primary, status: 0, error: 'GEMINI_API_KEY belum diisi; proxy akan mencoba provider cadangan yang sudah dikonfigurasi.' });
     }
-    return out_({
-      ok: true, text: text, model: result.model, fallback: fallback.join(', '),
-      version: PROXY_VERSION, freeMode: true, visualMode: 'SVG + tabel + grafik',
-      allowedModels: FREE_TEXT_MODELS, configuredModelWasRestricted: configured !== primary
-    });
+
+    var providers = configuredProviders_(props);
+    for (var i = 0; i < providers.length; i++) {
+      var p = providers[i];
+      var r = callOpenAIProvider_(p, body, prompt);
+      if (r.ok) return success_(r.text, p.name, r.model, 'Gemini → ' + p.name, failures, providers.slice(i + 1).map(function(x) { return x.name; }).join(', '));
+      failures.push({ provider: p.name, model: r.model || p.model, status: r.status || 0, error: String(r.error || 'Provider gagal').slice(0, 320) });
+    }
+
+    var codes = failures.map(function(x) { return Number(x.status) || 0; }).filter(function(x) { return x > 0; });
+    var finalStatus = codes.length ? codes[codes.length - 1] : 503;
+    var summary = failures.map(function(x) { return x.provider + (x.model ? ' [' + x.model + ']' : '') + ': ' + x.error; }).join(' | ');
+    return out_({ ok: false, status: finalStatus, version: PROXY_VERSION, freeMode: true, providerErrors: failures, error: 'Semua provider yang tersedia gagal. ' + summary + ' Periksa kuota, API Key provider, dan status layanan. Bagian soal yang sudah tersimpan tetap dapat dilanjutkan.' });
   } catch (err) {
-    return out_({ ok: false, error: String(err && err.message ? err.message : err) });
+    return out_({ ok: false, version: PROXY_VERSION, freeMode: true, error: String(err && err.message ? err.message : err) });
   }
+}
+
+function success_(text, provider, model, route, failures, fallback) {
+  return out_({ ok: true, text: text, provider: provider, model: model, route: route,
+    fallback: fallback || '', previousFailures: failures || [], version: PROXY_VERSION, freeMode: true,
+    multiAI: true, visualMode: 'SVG + tabel + grafik', imageApi: false });
+}
+
+function configuredProviders_(props) {
+  var all = {
+    GROQ: { name: 'Groq', key: props.getProperty('GROQ_API_KEY') || '', url: 'https://api.groq.com/openai/v1/chat/completions', model: props.getProperty('GROQ_MODEL') || 'openai/gpt-oss-120b' },
+    OPENROUTER: { name: 'OpenRouter', key: props.getProperty('OPENROUTER_API_KEY') || '', url: 'https://openrouter.ai/api/v1/chat/completions', model: props.getProperty('OPENROUTER_MODEL') || 'nvidia/nemotron-3-ultra-550b-a55b:free' }
+  };
+  var order = String(props.getProperty('AI_PROVIDER_ORDER') || 'GROQ,OPENROUTER').split(',').map(function(x) { return x.trim().toUpperCase(); });
+  var out = [];
+  order.forEach(function(k) { if (all[k] && all[k].key && !out.some(function(x) { return x.name === all[k].name; })) out.push(all[k]); });
+  return out;
+}
+
+function callOpenAIProvider_(provider, body, prompt) {
+  var messages = [];
+  if (body.system) messages.push({ role: 'system', content: String(body.system) + (body.json ? '\\nBalas hanya JSON valid, tanpa markdown.' : '') });
+  messages.push({ role: 'user', content: prompt });
+  var payload = { model: provider.model, messages: messages, max_tokens: body.ping ? 96 : Math.max(1800, Math.min(6000, Number(body.maxOutputTokens) || 5000)), temperature: body.ping ? 0.1 : (typeof body.temperature === 'number' ? Math.min(0.8, Math.max(0.1, body.temperature)) : 0.3) };
+  if (body.json && provider.name !== 'OpenRouter') payload.response_format = { type: 'json_object' };
+  var headers = { Authorization: 'Bearer ' + provider.key, 'Content-Type': 'application/json' };
+  if (provider.name === 'OpenRouter') { headers['X-Title'] = 'TKA GURU MI Husnayain Sleman'; }
+  var response, raw, data, code;
+  for (var attempt = 0; attempt < 4; attempt++) {
+    try {
+      response = UrlFetchApp.fetch(provider.url, { method: 'post', contentType: 'application/json', headers: headers, payload: JSON.stringify(payload), muteHttpExceptions: true });
+      code = response.getResponseCode(); raw = response.getContentText() || '{}';
+      try { data = JSON.parse(raw); } catch (e) { data = {}; }
+    } catch (err) { return { ok: false, status: 0, model: provider.model, error: String(err).slice(0, 320) }; }
+    if (code === 200) {
+      var choices = data.choices || [];
+      var content = choices[0] && choices[0].message ? choices[0].message.content : '';
+      if (Array.isArray(content)) content = content.map(function(x) { return x.text || ''; }).join('');
+      content = String(content || '').trim();
+      if (content && (!body.json || validJsonText_(content))) return { ok: true, status: 200, model: data.model || provider.model, text: cleanText_(content) };
+      return { ok: false, status: 200, model: data.model || provider.model, error: 'Provider mengembalikan jawaban kosong atau JSON tidak valid.' };
+    }
+    var errMsg = data.error && (data.error.message || data.error) ? (data.error.message || data.error) : raw;
+    // Beberapa model gratis tidak mendukung response_format; coba sekali tanpa opsi itu.
+    if (code === 400 && body.json && payload.response_format && /response_format|json_object|structured output|unsupported/i.test(String(errMsg))) { delete payload.response_format; continue; }
+    if (code === 400 && payload.max_tokens && /max_tokens|maximum tokens|use max_completion_tokens/i.test(String(errMsg))) { payload.max_completion_tokens = payload.max_tokens; delete payload.max_tokens; continue; }
+    if (code === 400 && Object.prototype.hasOwnProperty.call(payload, 'temperature') && /temperature.*(unsupported|not supported|invalid)|unsupported.*temperature/i.test(String(errMsg))) { delete payload.temperature; continue; }
+    return { ok: false, status: code, model: provider.model, error: String(errMsg).slice(0, 320) };
+  }
+  return { ok: false, status: code || 0, model: provider.model, error: 'Provider tidak memberikan respons.' };
+}
+
+function cleanText_(text) {
+  return String(text || '').trim().replace(/^\x60{3}(?:json)?\\s*/i, '').replace(/\\s*\x60{3}$/, '').trim();
+}
+function validJsonText_(text) {
+  try { JSON.parse(cleanText_(text)); return true; } catch (e) { return false; }
+}
+function testAlternativeProviders_(props) {
+  var all = {
+    Groq: { name: 'Groq', key: props.getProperty('GROQ_API_KEY') || '', url: 'https://api.groq.com/openai/v1/chat/completions', model: props.getProperty('GROQ_MODEL') || 'openai/gpt-oss-120b' },
+    OpenRouter: { name: 'OpenRouter', key: props.getProperty('OPENROUTER_API_KEY') || '', url: 'https://openrouter.ai/api/v1/chat/completions', model: props.getProperty('OPENROUTER_MODEL') || 'nvidia/nemotron-3-ultra-550b-a55b:free' }
+  };
+  var statuses = [];
+  ['Groq', 'OpenRouter'].forEach(function(name) {
+    var p = all[name];
+    if (!p.key) { statuses.push({ provider: name, configured: false, ok: false, message: 'API Key belum diisi di Script Properties.' }); return; }
+    var r = callOpenAIProvider_(p, { ping: true, json: false, temperature: 0.1 }, 'Reply exactly: TKA_PROVIDER_OK');
+    statuses.push({ provider: name, configured: true, ok: !!r.ok, model: r.model || p.model, message: r.ok ? 'Koneksi berhasil.' : String(r.error || 'Gagal').slice(0, 240) });
+  });
+  return { ok: true, version: PROXY_VERSION, freeMode: true, providers: statuses, info: 'Pemeriksaan provider cadangan selesai. Tes ini tidak memakai kuota Gemini.' };
 }
 
 function callFreeModels_(models, payload, apiKey) {
   var attempts = [];
-  var last = { code: 0, error: 'Tidak ada model gratis yang dapat dihubungi.', attempts: attempts };
+  var last = { code: 0, error: 'Tidak ada model Gemini yang dapat dihubungi.', attempts: attempts };
   for (var i = 0; i < models.length; i++) {
     var model = models[i];
     var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
     var response;
-    try {
-      response = UrlFetchApp.fetch(url, {
-        method: 'post', contentType: 'application/json',
-        headers: { 'x-goog-api-key': apiKey }, payload: JSON.stringify(payload), muteHttpExceptions: true
-      });
-    } catch (err) {
-      attempts.push({ model: model, status: 0, error: String(err).slice(0, 240) });
-      last = { code: 0, model: model, error: String(err), attempts: attempts };
-      continue;
-    }
-    var code = response.getResponseCode();
-    var raw = response.getContentText() || '{}';
-    var data;
+    try { response = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': apiKey }, payload: JSON.stringify(payload), muteHttpExceptions: true }); }
+    catch (err) { attempts.push({ model: model, status: 0, error: String(err).slice(0, 240) }); last = { code: 0, model: model, error: String(err), attempts: attempts }; continue; }
+    var code = response.getResponseCode(), raw = response.getContentText() || '{}', data;
     try { data = JSON.parse(raw); } catch (e) { data = { raw: raw }; }
     if (code === 200) return { code: 200, model: model, data: data };
-    var msg = data && data.error && data.error.message ? data.error.message : raw;
-    var retry = '';
-    try {
-      var details = data.error.details || [];
-      for (var d = 0; d < details.length; d++) if (details[d].retryDelay) retry = details[d].retryDelay;
-    } catch (e2) {}
+    var msg = data && data.error && data.error.message ? data.error.message : raw, retry = '';
+    try { var details = data.error.details || []; for (var d = 0; d < details.length; d++) if (details[d].retryDelay) retry = details[d].retryDelay; } catch (e2) {}
     attempts.push({ model: model, status: code, retryDelay: retry, error: String(msg).slice(0, 240) });
-    last = { code: code, model: model, error: String(msg).slice(0, 1800), retryDelay: retry, attempts: attempts };
+    last = { code: code, model: model, error: String(msg).slice(0, 900), retryDelay: retry, attempts: attempts };
     if ([400, 401, 403].indexOf(code) >= 0) break;
   }
   return last;
 }
-
-function out_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
-
+function out_(obj) { return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON); }
 function doGet() {
-  return out_({ ok: true, info: 'TKA GURU free text proxy aktif. Hanya Gemini teks + SVG/tabel; API gambar tidak tersedia pada mode ini.', version: PROXY_VERSION, freeMode: true, allowedModels: FREE_TEXT_MODELS });
-}`;
+  var p = PropertiesService.getScriptProperties();
+  return out_({ ok: true, info: 'TKA GURU Multi-AI v10 aktif: Gemini utama, Groq dan OpenRouter cadangan; visual SVG/tabel; tanpa API gambar.', version: PROXY_VERSION, freeMode: true, providersConfigured: { gemini: !!p.getProperty('GEMINI_API_KEY'), groq: !!p.getProperty('GROQ_API_KEY'), openrouter: !!p.getProperty('OPENROUTER_API_KEY') } });
+}`
 
-  const PROXY_CF = `// TKA GURU — Cloudflare Worker FREE TEXT PROXY v9
-// Secrets: GEMINI_API_KEY (required), ACCESS_TOKEN (optional).
-// Vars: GEMINI_MODEL (only allowlisted free models), GEMINI_FALLBACK_MODEL (optional).
-const VERSION = 9;
-const FREE_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
+  const PROXY_CF = `// TKA GURU — MULTI-AI FREE TEXT PROXY v10 (Cloudflare Worker)
+// Secrets: GEMINI_API_KEY (optional if another provider key is configured), GROQ_API_KEY, OPENROUTER_API_KEY, ACCESS_TOKEN (optional).
+// Vars: GEMINI_MODEL, GROQ_MODEL, OPENROUTER_MODEL.
+const VERSION = 10;
+const FREE_MODELS = ['gemini-3.8-flash','gemini-3.7-flash','gemini-3.6-flash'];
 const DEFAULT_MODEL = 'gemini-3.8-flash';
-const DEFAULT_FALLBACK = ['gemini-3.7-flash', 'gemini-3.6-flash'];
-const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
-const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' } });
-
-export default {
-  async fetch(request, env) {
-    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    if (request.method === 'GET') return json({ ok: true, version: VERSION, freeMode: true, info: 'TKA GURU free text proxy aktif; tidak ada API gambar.' });
-    if (request.method !== 'POST') return json({ ok: false, error: 'Method tidak didukung.' }, 405);
-    try {
-      const body = await request.json();
-      if (env.ACCESS_TOKEN && String(body.token || '') !== env.ACCESS_TOKEN) return json({ ok: false, error: 'Token akses tidak cocok.' }, 401);
-      if (!env.GEMINI_API_KEY) return json({ ok: false, error: 'Secret GEMINI_API_KEY belum diatur.' }, 500);
-      if (body.image) return json({ ok: false, error: 'Mode gratis TKA GURU hanya menggunakan AI teks dan SVG/tabel. API gambar berbayar sengaja dinonaktifkan.' }, 400);
-      const configured = env.GEMINI_MODEL || DEFAULT_MODEL;
-      const primary = FREE_MODELS.includes(configured) ? configured : DEFAULT_MODEL;
-      const fallbackConfig = (env.GEMINI_FALLBACK_MODEL || DEFAULT_FALLBACK.join(','));
-      const fallback = String(fallbackConfig).split(',').map(x => x.trim()).filter((x, i, a) => FREE_MODELS.includes(x) && x !== primary && a.indexOf(x) === i);
-      for (const model of FREE_MODELS) if (model !== primary && !fallback.includes(model)) fallback.push(model);
-      const models = [primary, ...fallback];
-      const prompt = body.ping ? 'Balas hanya dengan token TKA_READY. Jangan menambahkan penjelasan.' : String(body.prompt || '');
-      if (!prompt) return json({ ok: false, error: 'Prompt teks kosong.', version: VERSION, freeMode: true }, 400);
-      const generationConfig = {
-        // 32 token terlalu sedikit untuk Gemini 3.x yang dapat memakai token untuk thinking.
-        maxOutputTokens: body.ping ? 192 : Math.max(2048, Math.min(12000, Number(body.maxOutputTokens) || 8192)),
-        responseMimeType: body.json ? 'application/json' : 'text/plain'
-      };
-      const requestedThinking = String(body.thinkingLevel || (body.ping ? 'MINIMAL' : 'LOW')).toUpperCase();
-      generationConfig.thinkingConfig = { thinkingLevel: body.ping ? 'MINIMAL' : (['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'].includes(requestedThinking) ? requestedThinking : 'LOW'), includeThoughts: false };
-      const payload = {
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig
-      };
-      if (body.system) payload.systemInstruction = { parts: [{ text: String(body.system) }] };
-      const attempts = [];
-      let last = { status: 0, error: 'Tidak ada model gratis yang dapat dihubungi.' };
-      for (const model of models) {
-        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          const parts = data.candidates?.[0]?.content?.parts || [];
-          const text = parts.filter(p => !p.thought).map(p => p.text || '').join('');
-          if (body.ping && !String(text || '').trim()) {
-            const candidate = data.candidates?.[0] || {};
-            const block = data.promptFeedback || {};
-            return json({ ok: false, version: VERSION, freeMode: true, model,
-              error: 'Proxy versi ' + VERSION + ' sudah menjangkau Gemini (' + model + '), tetapi model tidak mengirim teks jawaban. Finish reason: ' + (candidate.finishReason || 'tidak tersedia') + (block.blockReason ? '; prompt block: ' + block.blockReason : '') + '. Tes memakai thinking minimal; coba sekali lagi.' });
-          }
-          return json({ ok: true, text, model, fallback: fallback.join(', '), version: VERSION, freeMode: true, visualMode: 'SVG + tabel + grafik', allowedModels: FREE_MODELS, configuredModelWasRestricted: configured !== primary });
-        }
-        attempts.push({ model, status: res.status, error: String(data.error?.message || ('HTTP ' + res.status)).slice(0, 240) });
-        last = { status: res.status, model, error: data.error?.message || ('HTTP ' + res.status), attempts };
-        if ([400, 401, 403].includes(res.status)) break;
-      }
-      return json({ ok: false, status: last.status, model: last.model, attempts, error: last.error });
-    } catch (err) {
-      return json({ ok: false, error: String(err && err.message ? err.message : err) }, 500);
-    }
-  }
-};`;
-  return { ready, test, run, regenQuestion, regenGroup, normQuestion, normStimulus, normVisual, parseJSON, PROXY_GAS, PROXY_CF, AIError, SYSTEM, reqStat, cacheCount, cacheClear, PER_CALL };
+const cors = { 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST, GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type' };
+const json = (data,status=200)=>new Response(JSON.stringify(data),{status,headers:{...cors,'Content-Type':'application/json; charset=utf-8'}});
+const clean = t=>String(t||'').trim().replace(/^\x60\x60\x60(?:json)?\\s*/i,'').replace(/\\s*\x60\x60\x60$/,'').trim();
+const valid = t=>{try{JSON.parse(clean(t));return true;}catch(e){return false;}};
+async function chatProvider(p,body,prompt){
+ const payload={model:p.model,messages:[...(body.system?[{role:'system',content:String(body.system)+(body.json?'\\nBalas hanya JSON valid, tanpa markdown.':'')}]:[]),{role:'user',content:prompt}],max_tokens:body.ping?96:Math.max(1800,Math.min(6000,Number(body.maxOutputTokens)||5000)),temperature:body.ping?0.1:(typeof body.temperature==='number'?Math.min(0.8,Math.max(0.1,body.temperature)):0.3)};
+ if(body.json&&p.name!=='OpenRouter')payload.response_format={type:'json_object'};
+ const headers={'Authorization':'Bearer '+p.key,'Content-Type':'application/json'};if(p.name==='OpenRouter')headers['X-Title']='TKA GURU MI Husnayain Sleman';
+ for(let n=0;n<2;n++){
+  let res,data;try{res=await fetch(p.url,{method:'POST',headers,body:JSON.stringify(payload)});data=await res.json().catch(()=>({}));}catch(e){return {ok:false,status:0,error:String(e)};}
+  if(res.ok){let c=data.choices?.[0]?.message?.content||'';if(Array.isArray(c))c=c.map(x=>x.text||'').join('');if(c&&(!body.json||valid(c)))return {ok:true,text:clean(c),model:data.model||p.model};return {ok:false,status:200,error:'Jawaban kosong atau JSON tidak valid.'};}
+  const msg=data.error?.message||('HTTP '+res.status);if(res.status===400&&body.json&&payload.response_format&&/response_format|json_object|structured output|unsupported/i.test(String(msg))){delete payload.response_format;continue;}if(res.status===400&&payload.max_tokens&&/max_tokens|maximum tokens|use max_completion_tokens/i.test(String(msg))){payload.max_completion_tokens=payload.max_tokens;delete payload.max_tokens;continue;}if(res.status===400&&Object.prototype.hasOwnProperty.call(payload,'temperature')&&/temperature.*(unsupported|not supported|invalid)|unsupported.*temperature/i.test(String(msg))){delete payload.temperature;continue;}return {ok:false,status:res.status,error:String(msg).slice(0,320)};
+ }
+ return {ok:false,status:0,error:'Provider tidak menjawab.'};
+}
+export default {async fetch(request,env){
+ if(request.method==='OPTIONS')return new Response(null,{headers:cors});
+ if(request.method==='GET')return json({ok:true,version:VERSION,freeMode:true,info:'TKA GURU Multi-AI v10 aktif.'});
+ if(request.method!=='POST')return json({ok:false,error:'Method tidak didukung.'},405);
+ try{
+  const b=await request.json();if(env.ACCESS_TOKEN&&String(b.token||'')!==env.ACCESS_TOKEN)return json({ok:false,error:'Token akses tidak cocok.'},401);
+  if(b.image)return json({ok:false,error:'Mode gratis tidak memakai API gambar.'},400);
+  const alternatives=[{name:'Groq',key:env.GROQ_API_KEY,url:'https://api.groq.com/openai/v1/chat/completions',model:env.GROQ_MODEL||'openai/gpt-oss-120b'},{name:'OpenRouter',key:env.OPENROUTER_API_KEY,url:'https://openrouter.ai/api/v1/chat/completions',model:env.OPENROUTER_MODEL||'nvidia/nemotron-3-ultra-550b-a55b:free'}].filter(p=>p.key);
+  if(b.providerTest){const statuses=[];for(const p of [{name:'Groq',key:env.GROQ_API_KEY,url:'https://api.groq.com/openai/v1/chat/completions',model:env.GROQ_MODEL||'openai/gpt-oss-120b'},{name:'OpenRouter',key:env.OPENROUTER_API_KEY,url:'https://openrouter.ai/api/v1/chat/completions',model:env.OPENROUTER_MODEL||'nvidia/nemotron-3-ultra-550b-a55b:free'}]){if(!p.key){statuses.push({provider:p.name,configured:false,ok:false,message:'API Key belum diatur.'});continue;}const r=await chatProvider(p,{ping:true,json:false},'Reply exactly: TKA_PROVIDER_OK');statuses.push({provider:p.name,configured:true,ok:r.ok,model:r.model||p.model,message:r.ok?'Koneksi berhasil.':r.error});}return json({ok:true,version:VERSION,freeMode:true,providers:statuses});}
+  const prompt=b.ping?'Balas hanya dengan token TKA_READY. Jangan menambahkan penjelasan.':String(b.prompt||'');if(!prompt)return json({ok:false,error:'Prompt teks kosong.',version:VERSION,freeMode:true},400);
+  const failures=[];const gKey=env.GEMINI_API_KEY||'';
+  if(gKey){const cfg=String(env.GEMINI_MODEL||DEFAULT_MODEL),primary=FREE_MODELS.includes(cfg)?cfg:DEFAULT_MODEL;const models=[primary,...FREE_MODELS.filter(m=>m!==primary)];const gen={maxOutputTokens:b.ping?192:Math.max(2048,Math.min(12000,Number(b.maxOutputTokens)||8192)),responseMimeType:b.json?'application/json':'text/plain',thinkingConfig:{thinkingLevel:b.ping?'MINIMAL':(b.thinkingLevel||'LOW'),includeThoughts:false}};const payload={contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:gen};if(b.system)payload.systemInstruction={parts:[{text:String(b.system)}]};for(const m of models){try{const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(m)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':gKey},body:JSON.stringify(payload)});const d=await r.json().catch(()=>({}));if(r.ok){const t=(d.candidates?.[0]?.content?.parts||[]).filter(x=>!x.thought).map(x=>x.text||'').join('');if(t&&(!b.json||valid(t)))return json({ok:true,text:t,provider:'Gemini',model:m,version:VERSION,freeMode:true,multiAI:true,visualMode:'SVG + tabel + grafik'});failures.push({provider:'Gemini',model:m,status:200,error:'Jawaban kosong/JSON tidak valid.'});}else failures.push({provider:'Gemini',model:m,status:r.status,error:d.error?.message||('HTTP '+r.status)});}catch(e){failures.push({provider:'Gemini',model:m,status:0,error:String(e)});}}
+  }else failures.push({provider:'Gemini',status:0,error:'GEMINI_API_KEY belum diatur.'});
+  for(const p of alternatives){const r=await chatProvider(p,b,prompt);if(r.ok)return json({ok:true,text:r.text,provider:p.name,model:r.model,route:'Gemini → '+p.name,version:VERSION,freeMode:true,multiAI:true,visualMode:'SVG + tabel + grafik',previousFailures:failures});failures.push({provider:p.name,model:r.model||p.model,status:r.status||0,error:r.error||'Gagal'});}
+  return json({ok:false,status:503,version:VERSION,freeMode:true,providerErrors:failures,error:'Semua provider AI gagal: '+failures.map(x=>x.provider+': '+x.error).join(' | ')+'. Periksa kuota dan API Key; lanjutkan dari checkpoint setelah pulih.'},503);
+ }catch(e){return json({ok:false,version:VERSION,freeMode:true,error:String(e)},500);}
+}};`
+  return { ready, test, testProviders, run, regenQuestion, regenGroup, normQuestion, normStimulus, normVisual, parseJSON, PROXY_GAS, PROXY_CF, AIError, SYSTEM, reqStat, cacheCount, cacheClear, PER_CALL };
 })();
 
 /* ===== 80_ui_core.js ===== */
@@ -11096,7 +11135,7 @@ VIEWS.create = () => {
               <button data-act="kisi:engine" data-e="ai" class="${APP.engineChoice === 'ai' ? 'on' : ''}">${ic('spark')} AI Gemini</button>
               <button data-act="kisi:engine" data-e="lokal" class="${APP.engineChoice === 'lokal' ? 'on' : ''}">Generator lokal</button></div>
               <p class="small muted" style="margin:10px 0 0">${APP.engineChoice === 'ai' ? 'Gemini membuat soal baru dari kisi-kisi, menyusun stimulus, kunci, dan pembahasan, lalu membuat visual SVG/tabel/grafik yang bisa dicetak. Beberapa stimulus juga menyimpan arahan foto opsional yang dapat Anda ekspor untuk pengayaan di aplikasi lain. Mode ini tidak memanggil Nano Banana atau API gambar berbayar.' : 'Generator lokal bekerja tanpa internet memakai template soal Matematika, bank bacaan Bahasa Indonesia, dan bank soal IPAS bawaan. Ini hanya digunakan karena Anda memilihnya.'}</p>
-              ${APP.engineChoice === 'ai' && !aiOn ? `<div class="callout warn" style="margin-top:10px">AI belum terverifikasi. Hubungkan Gemini pada <a href="#/pengaturan">Pengaturan</a> dan gunakan proxy mode gratis versi 9. Generator tidak akan beralih ke lokal secara otomatis.</div>` : ''}`
+              ${APP.engineChoice === 'ai' && !aiOn ? `<div class="callout warn" style="margin-top:10px">AI belum terverifikasi. Hubungkan minimal satu provider AI pada <a href="#/pengaturan">Pengaturan</a> dan gunakan proxy Multi-AI versi 10. Generator tidak akan beralih ke lokal secara otomatis.</div>` : ''}`
             : APP.engineChoice === 'lokal'
               ? `<div class="engine-box"><b>Generator lokal dipilih secara sadar.</b> Sesi ini akan menggunakan bank/template lokal. Untuk kembali ke AI, hubungkan dan verifikasi Gemini di <a href="#/pengaturan">Pengaturan</a>.</div>`
               : `<div class="engine-box"><b>AI Gemini belum terverifikasi.</b> Aplikasi tidak akan otomatis membuat soal dengan generator lokal. <a href="#/pengaturan">Hubungkan dan uji AI Gemini</a> terlebih dahulu. <div style="margin-top:10px"><button class="btn btn-sm" data-act="kisi:engine" data-e="lokal">Saya memilih generator lokal untuk sesi ini</button></div></div>`}
@@ -11152,7 +11191,7 @@ ACT['kisi:go'] = () => {
   if (!text) { toast('Isi kisi-kisi terlebih dahulu.', 'bad'); $('#kisi').focus(); return; }
   const engine = APP.engineChoice === 'lokal' ? 'lokal' : 'ai';
   if (engine === 'ai' && !AI.ready()) {
-    modal({ title: 'Koneksi AI belum siap', body: '<p>Generator AI belum terverifikasi. Buka Pengaturan → Koneksi AI Gemini, pasang proxy mode gratis versi 9, uji Gemini teks, dan simpan konfigurasi. Visual Matematika/IPAS dibuat sebagai SVG/tabel; tidak memerlukan model gambar berbayar.</p>' });
+    modal({ title: 'Koneksi AI belum siap', body: '<p>Generator AI belum terverifikasi. Buka Pengaturan → Koneksi Multi-AI, pasang proxy versi 10, uji AI utama, dan simpan konfigurasi. Visual Matematika/IPAS dibuat sebagai SVG/tabel; tidak memerlukan model gambar berbayar.</p>' });
     return;
   }
   const r = ENGINE.analyze(text);
@@ -12172,8 +12211,8 @@ VIEWS.settings = () => {
   const s = STORE.settings();
   const ai = s.ai || {};
   const on = AI.ready();
-  const outdated = !!(ai.url && (+ai.proxyV || 0) < 9);
-  const proxyV9Detected = (+ai.proxyV || 0) >= 9 && ai.freeMode === true;
+  const outdated = !!(ai.url && (+ai.proxyV || 0) < 10);
+  const proxyV10Detected = (+ai.proxyV || 0) >= 10 && ai.freeMode === true;
   setView(`<div class="wrap" style="max-width:980px">
     <div class="page-head"><div><h1>Pengaturan</h1><p>Data naskah dan pengaturan tersimpan di browser perangkat ini (localStorage). Gunakan ekspor untuk memindahkan naskah ke perangkat lain.</p></div></div>
     <section class="panel"><h2 style="font-size:17px;color:var(--ink-900)">Profil guru</h2>
@@ -12186,35 +12225,42 @@ VIEWS.settings = () => {
       <button class="btn btn-primary" data-act="set:save">${ic('check')}Simpan profil</button>
     </section>
 
-    <section class="panel"><div class="row"><h2 style="font-size:17px;color:var(--ink-900);margin:0">Koneksi AI Gemini — Mode Gratis</h2><span class="spacer"></span><span class="chip ${on ? 'ok' : proxyV9Detected ? 'warn' : 'gray'}">${on ? 'AI teks & proxy gratis siap' + (ai.model ? ' • ' + esc(ai.model) : '') : proxyV9Detected ? 'Proxy v9 terdeteksi — AI belum terverifikasi' : outdated ? 'Proxy belum terverifikasi / versi lama' : 'Belum terhubung'}</span></div>
+    <section class="panel"><div class="row"><h2 style="font-size:17px;color:var(--ink-900);margin:0">Koneksi Multi-AI — Mode Gratis</h2><span class="spacer"></span><span class="chip ${on ? 'ok' : proxyV10Detected ? 'warn' : 'gray'}">${on ? 'Multi-AI & proxy gratis siap' + (ai.model ? ' • ' + esc(ai.model) : '') : proxyV10Detected ? 'Proxy v10 terdeteksi — AI belum terverifikasi' : outdated ? 'Proxy belum terverifikasi / versi lama' : 'Belum terhubung'}</span></div>
       <div class="callout ok" style="margin:12px 0"><b>Mode gratis aktif sebagai standar.</b> Gemini menangani analisis kisi-kisi, penyusunan stimulus, soal, kunci, pembahasan, dan validasi. Visual dibuat sebagai SVG, diagram, tabel, grafik, serta piktogram dari data yang dihasilkan AI. Aplikasi tidak memanggil Nano Banana, API gambar, atau model berbayar.</div>
-      <p class="small muted">Model utama: <code>gemini-3.8-flash</code>. Bila model utama terkena batas kuota atau tidak tersedia, proxy mencoba model teks gratis yang diizinkan: <code>gemini-3.7-flash</code> dan <code>gemini-3.6-flash</code>. Batas gratis mengikuti kuota proyek Google AI Studio; jika seluruh model mencapai batas, proses perlu dilanjutkan setelah kuota pulih.</p>
-      <div class="callout" style="margin-bottom:14px">${ic('shield')} <b>Keamanan kunci API.</b> Kunci API Gemini disimpan di Script Properties pada Google Apps Script / secret Cloudflare Worker, bukan di file HTML atau browser. Untuk mode ini, tidak perlu mengaktifkan billing model gambar. Hindari memasukkan nama lengkap, NISN, kata sandi, atau data pribadi siswa ke dalam prompt AI.</div>
+      <p class="small muted">Urutan failover: Gemini → Groq → OpenRouter. Gemini tetap utama. Groq menggunakan paket Free dan model bawaan <code>openai/gpt-oss-120b</code>; OpenRouter menggunakan model gratis <code>nvidia/nemotron-3-ultra-550b-a55b:free</code>. Model/provider dapat berubah ketersediaan dan batas; proses tidak memutar akun untuk mengakali kuota.</p>
+      <div class="callout" style="margin-bottom:14px">${ic('shield')} <b>Keamanan kunci API.</b> Semua kunci provider disimpan hanya di Script Properties Apps Script / Secrets Cloudflare, bukan di HTML atau browser. Hindari mengirim NISN, kata sandi, dan data pribadi siswa ke provider AI.</div>
+      <details style="margin:12px 0 16px" open><summary style="cursor:pointer;font-weight:750;color:var(--ink-900)">Provider cadangan yang perlu didaftarkan (opsional tetapi disarankan)</summary>
+        <div class="callout" style="margin-top:10px"><b>1. Groq — cadangan pertama.</b> Daftar di <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq Console / API Keys</a>. Paket Free $0 untuk mulai dan memiliki batas penggunaan; model bawaan <code>openai/gpt-oss-120b</code>. <a href="https://console.groq.com/docs/rate-limits" target="_blank" rel="noopener">Lihat batas resmi</a>.</div>
+        <div class="callout" style="margin-top:8px"><b>2. OpenRouter — cadangan kedua.</b> Daftar di <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter API Keys</a>. Gunakan model gratis <code>nvidia/nemotron-3-ultra-550b-a55b:free</code>. Paket gratis varian :free dibatasi 50 permintaan per hari. <a href="https://openrouter.ai/pricing" target="_blank" rel="noopener">Lihat harga dan batas resmi</a>.</div>
+        <p class="small muted">Setelah membuat key, buka Apps Script → Project Settings → Script Properties. Tambahkan <code>GROQ_API_KEY</code> dan/atau <code>OPENROUTER_API_KEY</code>. Opsional: <code>AI_PROVIDER_ORDER</code> = <code>GROQ,OPENROUTER</code>. Opsional model: <code>GROQ_MODEL</code> = <code>openai/gpt-oss-120b</code>; <code>OPENROUTER_MODEL</code> = <code>nvidia/nemotron-3-ultra-550b-a55b:free</code>. Jangan tempel key ke kolom URL, HTML, atau chat.</p>
+        <button class="btn btn-sm" data-act="ai:providers-test">${ic('activity')}Uji provider cadangan</button>
+        <span id="providerMsg" class="small muted"></span>
+      </details>
       <div class="grid-2" style="grid-template-columns:2fr 1fr;gap:12px">
         <div class="field"><label for="aiUrl">URL proxy</label><input id="aiUrl" class="input" value="${esc(ai.url)}" placeholder="https://script.google.com/macros/s/…/exec" inputmode="url" autocomplete="off"></div>
         <div class="field"><label for="aiTok">Token akses (opsional)</label><input id="aiTok" class="input" type="password" value="${esc(ai.token)}" placeholder="Sama dengan ACCESS_TOKEN di proxy" autocomplete="off"></div>
       </div>
       <div class="row">
-        <button class="btn btn-primary" data-act="ai:test">${ic('spark')}Uji Gemini Teks & Simpan</button>
+        <button class="btn btn-primary" data-act="ai:test">${ic('spark')}Uji AI Utama & Simpan</button>
         ${ai.url ? `<button class="btn btn-danger" data-act="ai:off">${ic('x')}Putuskan</button>` : ''}
         <span id="aiMsg" class="small"></span>
       </div>
-      ${outdated ? `<div class="callout warn" style="margin-top:14px"><b>Proxy belum berhasil diverifikasi sebagai versi 9.</b> Status ini belum memastikan deployment lama; tes koneksi belum menyimpan nomor versi. Periksa URL <code>/exec</code>, lalu pastikan deployment memakai <b>New version</b> dari kode Apps Script terbaru.</div>` : ''}
-      ${proxyV9Detected && !on ? `<div class="callout warn" style="margin-top:14px"><b>Proxy versi 9 terdeteksi, tetapi AI belum lolos tes.</b> Periksa pesan tes di atas. Ini berbeda dari proxy lama; kemungkinan masalah berada pada respons model, kuota, atau konfigurasi API Key.</div>` : ''}
-      ${on ? `<div class="callout ok" style="margin-top:12px"><b>Proxy gratis versi ${+ai.proxyV} terverifikasi.</b><br>Model aktif: <b>${esc(ai.model || 'Gemini')}</b>${ai.fallback ? ` • model cadangan: ${esc(ai.fallback)}` : ''}<br>Mode visual: <b>SVG + tabel + grafik</b><br>API gambar: <b>tidak dipanggil</b></div>` : ''}
-      <details style="margin-top:16px" open><summary style="cursor:pointer;font-weight:650;color:var(--ink-900)">Panduan memasang proxy gratis dengan Google Apps Script</summary>
+      ${outdated ? `<div class="callout warn" style="margin-top:14px"><b>Proxy belum berhasil diverifikasi sebagai versi 10.</b> Status ini belum memastikan deployment lama; tes koneksi belum menyimpan nomor versi. Periksa URL <code>/exec</code>, lalu pastikan deployment memakai <b>New version</b> dari kode Apps Script terbaru.</div>` : ''}
+      ${proxyV10Detected && !on ? `<div class="callout warn" style="margin-top:14px"><b>Proxy versi 10 terdeteksi, tetapi AI belum lolos tes.</b> Periksa pesan tes di atas. Ini berbeda dari proxy lama; kemungkinan masalah berada pada respons model, kuota, atau konfigurasi API Key.</div>` : ''}
+      ${on ? `<div class="callout ok" style="margin-top:12px"><b>Proxy Multi-AI versi ${+ai.proxyV} terverifikasi.</b><br>Provider aktif: <b>${esc(ai.provider || 'Gemini')}</b> • Model: <b>${esc(ai.model || 'Gemini')}</b>${ai.fallback ? ` • model cadangan: ${esc(ai.fallback)}` : ''}<br>Mode visual: <b>SVG + tabel + grafik</b><br>API gambar: <b>tidak dipanggil</b></div>` : ''}
+      <details style="margin-top:16px" open><summary style="cursor:pointer;font-weight:650;color:var(--ink-900)">Panduan memasang proxy Multi-AI gratis dengan Google Apps Script</summary>
         <ol class="steps-guide" style="margin-top:10px">
           <li>Buka <b>Google AI Studio</b> dan buat API Key. Pastikan akun/model memiliki kuota free tier.</li>
-          <li>Buka <b>script.google.com</b>, buat proyek Apps Script, lalu ganti seluruh isi <code>Code.gs</code> dengan kode proxy versi 9 di bawah.</li>
-          <li>Di <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> dengan API Key Anda. Opsional: tambahkan <code>ACCESS_TOKEN</code> dan isi token yang sama pada kolom Token akses di atas.</li>
-          <li>Model dibatasi otomatis pada daftar gratis: <code>gemini-3.8-flash</code>, <code>gemini-3.7-flash</code>, dan <code>gemini-3.6-flash</code>. Properti model lama yang menunjuk ke model di luar allowlist akan diabaikan dan tidak dipanggil.</li>
+          <li>Buka <b>script.google.com</b>, lalu ganti seluruh isi <code>Code.gs</code> dengan kode Multi-AI versi 10 di bawah.</li>
+          <li>Di <b>Project Settings → Script Properties</b>, tambahkan <code>GEMINI_API_KEY</code> (disarankan), serta <code>GROQ_API_KEY</code> dan/atau <code>OPENROUTER_API_KEY</code> jika provider tersebut sudah didaftarkan. Minimal satu API Key harus diisi. Opsional: tambahkan <code>ACCESS_TOKEN</code> dan isi token yang sama pada kolom Token akses.</li>
+          <li>Gemini tetap utama. Jika gagal karena kuota/gangguan, proxy mencoba Groq lalu OpenRouter sesuai API Key yang diatur di Script Properties.</li>
           <li>Klik <b>Deploy → New deployment → Web app</b>. Pilih <i>Execute as: Me</i> dan <i>Who has access: Anyone</i>, lalu izinkan akses.</li>
-          <li>Salin URL web app yang berakhiran <code>/exec</code> ke kolom URL proxy, isi token bila dibuat, lalu klik <b>Uji Gemini Teks & Simpan</b>.</li>
+          <li>Salin URL web app yang berakhiran <code>/exec</code> ke kolom URL proxy, isi token bila dibuat, lalu klik <b>Uji AI Utama & Simpan</b>.</li>
           <li>Jika memperbarui kode di kemudian hari, gunakan <b>Deploy → Manage deployments → ikon pensil → Version: New version → Deploy</b>. URL /exec tetap sama.</li>
         </ol>
-        <div class="row" style="margin-bottom:6px"><b class="small">Kode Apps Script — teks gratis saja</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="gas">${ic('copy')}Salin kode</button></div>
+        <div class="row" style="margin-bottom:6px"><b class="small">Kode Apps Script — Multi-AI teks gratis</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="gas">${ic('copy')}Salin kode</button></div>
         <pre class="code">${esc(AI.PROXY_GAS)}</pre>
-        <details style="margin-top:12px"><summary class="small" style="cursor:pointer">Alternatif: Cloudflare Worker — teks gratis saja</summary>
+        <details style="margin-top:12px"><summary class="small" style="cursor:pointer">Alternatif: Cloudflare Worker — Multi-AI teks gratis</summary>
           <div class="row" style="margin:8px 0 6px"><b class="small">Kode Worker</b><span class="spacer"></span><button class="btn btn-sm" data-act="ai:copy" data-k="cf">${ic('copy')}Salin kode</button></div>
           <pre class="code">${esc(AI.PROXY_CF)}</pre>
         </details>
@@ -12272,22 +12318,36 @@ ACT['ai:test'] = async (el) => {
     msg.innerHTML = `<span style="color:var(--bad)">${esc(hint.msg)}</span>`;
     return;
   }
-  el.disabled = true; msg.textContent = 'Menguji model teks Gemini dan memeriksa mode gratis…';
+  el.disabled = true; msg.textContent = 'Menguji jalur AI utama dan memeriksa proxy Multi-AI v10…';
   try {
     const d = await AI.test(url, token);
-    if (+d.version < 8 || d.freeMode !== true) throw new Error('Proxy belum menggunakan mode gratis versi 9. Salin kode proxy baru, ganti seluruh Code.gs, lalu deploy New version.');
+    if (+d.version < 10 || d.freeMode !== true) throw new Error('Proxy belum menggunakan Multi-AI v10. Salin kode proxy baru, isi Script Properties provider, lalu deploy New version.');
     const s = STORE.settings();
     s.ai = {
-      url, token, verifiedAt: Date.now(), model: d.model || 'gemini-3.8-flash',
-      fallback: d.fallback || '', proxyV: +d.version || 8,
+      url, token, verifiedAt: Date.now(), model: d.model || 'gemini-3.8-flash', provider: d.provider || 'Gemini',
+      fallback: d.fallback || '', proxyV: +d.version || 10,
       freeMode: true, visualMode: 'SVG + tabel + grafik'
     };
     STORE.saveSettings(s);
-    toast('Gemini teks gratis terhubung dan terverifikasi.', 'ok'); VIEWS.settings(); renderTopbar('/pengaturan');
+    toast('Jalur AI utama/cadangan terhubung dan terverifikasi.', 'ok'); VIEWS.settings(); renderTopbar('/pengaturan');
   } catch (e) {
     const s = STORE.settings(); s.ai = { url, token, verifiedAt: 0, model: e.proxyModel || '', fallback: '', proxyV: +e.proxyVersion || 0, freeMode: e.proxyFreeMode === true, visualMode: 'SVG + tabel + grafik' }; STORE.saveSettings(s);
     msg.innerHTML = `<span style="color:var(--bad)">Gagal: ${esc(e.message)}</span>`; renderTopbar('/pengaturan');
   } finally { el.disabled = false; }
+};
+ACT['ai:providers-test'] = async (el) => {
+  const url = $('#aiUrl').value.trim(), token = $('#aiTok').value.trim();
+  const msg = $('#providerMsg');
+  if (!url) { msg.textContent = 'Isi dan simpan URL proxy terlebih dahulu.'; return; }
+  const hint = proxyHint(url, token); if (hint) { msg.textContent = hint.msg; return; }
+  el.disabled = true; msg.textContent = 'Menguji provider cadangan yang API Key-nya sudah diisi…';
+  try {
+    const d = await AI.testProviders(url, token);
+    if (+d.version < 10 || d.freeMode !== true) throw new Error('Proxy bukan Multi-AI v10. Perbarui Code.gs dan deploy New version.');
+    const rows = (d.providers || []).map(x => x.provider + ': ' + (x.ok ? 'BERHASIL (' + x.model + ')' : x.configured ? 'GAGAL — ' + x.message : 'belum dikonfigurasi'));
+    msg.innerHTML = '<span style="color:var(--ok)">' + esc(rows.join(' • ') || 'Tidak ada provider cadangan.') + '</span>';
+  } catch (e) { msg.innerHTML = '<span style="color:var(--bad)">Tes gagal: ' + esc(e.message) + '</span>'; }
+  finally { el.disabled = false; }
 };
 ACT['ai:off'] = () => { const s = STORE.settings(); s.ai = { url: '', token: '', verifiedAt: 0, model: '', fallback: '', proxyV: 0, freeMode: false, visualMode: 'SVG + tabel + grafik' }; STORE.saveSettings(s); APP.engineChoice = 'lokal'; toast('Koneksi AI diputuskan.'); VIEWS.settings(); renderTopbar('/pengaturan'); };
 ACT['ai:copy'] = async (el) => { const ok = await copyText(el.dataset.k === 'cf' ? AI.PROXY_CF : AI.PROXY_GAS); toast(ok ? 'Kode disalin.' : 'Gagal menyalin.', ok ? 'ok' : 'bad'); };
